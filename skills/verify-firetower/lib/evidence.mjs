@@ -346,7 +346,19 @@ async function post(plan, captures, flags) {
      actually rendered — and every entry has to clear the approved origin and
      path shape before it is written down. Nothing downstream of this point
      ever derives a request target from comment text. */
-  const manifest = await recordAttachments(plan, { repo: flags.repo, comment: url, expected: attached });
+  const manifest = await recordAttachments(plan, {
+    repo: flags.repo,
+    comment: url,
+    /* Every image this post published, by the alt text the body gives it —
+       including the states a journey photographed on the way through. A
+       manifest that vouched for the final screenshots and quietly left the
+       others out would have `verify` say "cleanup is allowed from here"
+       about pictures it never checked. */
+    expected: [
+      ...attached.map((capture) => capture.name),
+      ...alongside.map((shot) => `${shot.of} — ${shot.was}`),
+    ],
+  });
 
   say("");
   table([
@@ -418,7 +430,23 @@ async function verify(plan, captures, flags) {
      lock is a file on disk — but under no circumstances is a URL taken out of
      the comment body, which is where an accessibility snapshot of a driven
      application goes and therefore where attacker-chosen text goes. */
-  const recorded = held?.attachments ?? [];
+  /* **Of this comment**, not of the run. A run that posts between features —
+     which is what the feature map's sweep tells you to do, because unposted
+     evidence is the failure state — has several comments, and the manifest
+     holds the attachments of all of them. Checking every recorded URL
+     against the latest body reported a reviewer-visible first comment as
+     broken. Attachments recorded before this field existed carry no comment
+     and are checked against whatever is being verified, which is the old
+     behaviour for old locks. */
+  const everything = held?.attachments ?? [];
+  /* A lock written before this field existed has no comment on any entry, and
+     for it the old behaviour is exactly right: one run, one comment, check
+     them all. A lock that has the field somewhere is a lock this build has
+     posted into, so an entry without one came from an earlier post and is
+     reported rather than checked against a comment it is not in. */
+  const attributed = everything.some((a) => a.comment);
+  const recorded = everything.filter((a) => (attributed ? a.comment === last.comment : true));
+  const elsewhere = everything.filter((a) => !recorded.includes(a));
   if (!recorded.length) {
     return fail(EXIT.evidence, {
       problem: "no attachment is recorded for this run, so there is nothing that may be verified",
@@ -485,7 +513,10 @@ async function verify(plan, captures, flags) {
   table([
     "Comment",
     ["url", last.comment],
-    ["attachments", `${recorded.length} recorded for this run, all on ${ATTACHMENT_ORIGIN}`],
+    [
+      "attachments",
+      `${recorded.length} recorded for this comment, all on ${ATTACHMENT_ORIGIN}${elsewhere.length ? dim(`  (${elsewhere.length} in earlier comments of this run, verified when those were posted)`) : ""}`,
+    ],
     ["in the body", missing.length ? `${missing.length} recorded attachment(s) are NOT referenced by the comment` : "every recorded attachment is referenced"],
     ...resolved.map((r) => [r.ok ? "resolves" : "BROKEN", `${r.ok ? `${r.status} ${r.type}` : r.why}  ${r.url.slice(0, 72)}`, r.ok ? tick() : cross()]),
   ]);
@@ -528,6 +559,8 @@ async function verify(plan, captures, flags) {
  */
 async function recordAttachments(plan, { repo, comment, expected }) {
   if (!expected.length) return { ok: true, attachments: [] };
+  /* `expected` is a list of alt texts: the name of a capture, or the name of
+     a state a journey passed through on the way to one. */
   const id = comment?.split("#issuecomment-").pop();
   const where = repo ?? (await originRepo(plan));
   if (!id || !where) return { ok: false, why: `cannot read the comment back (url ${comment ?? "none"}, repo ${where ?? "unknown"})` };
@@ -540,7 +573,7 @@ async function recordAttachments(plan, { repo, comment, expected }) {
     return { ok: false, why: `reading the comment back failed: ${String(error.stderr ?? error.message).trim().split("\n").pop()}` };
   }
 
-  const wanted = new Set(expected.map((c) => c.name));
+  const wanted = new Set(expected);
   const attachments = [];
   for (const match of body.matchAll(/!\[([^\]]*)\]\(([^)\s]+)\)/g)) {
     const [, alt, candidate] = match;
@@ -548,7 +581,7 @@ async function recordAttachments(plan, { repo, comment, expected }) {
     const approved = approvedAttachment(candidate);
     if (!approved.ok) continue;
     if (attachments.some((a) => a.name === alt)) continue;
-    attachments.push({ name: alt, url: approved.url, recordedAt: new Date().toISOString() });
+    attachments.push({ name: alt, url: approved.url, comment, recordedAt: new Date().toISOString() });
   }
 
   if (attachments.length !== expected.length) {

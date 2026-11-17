@@ -168,11 +168,14 @@ async function capture(plan, { state, gesture, signinOnly }, flags) {
 
   if (!password(plan)) return noPassword(plan);
   if (!(await listening(plan.renderer.value))) return noRenderer(plan);
+  /* The address first, because an address this run cannot establish as its
+     own is a refusal (exit 2) rather than a precondition (exit 4), and the
+     two want different answers from whoever reads them. */
   if (chosen?.needs === "ssh-endpoint") {
     const endpoint = ownsEndpoint(plan, flags.at);
     if (!endpoint.ok) return refusedEndpoint(plan, gesture, endpoint);
   }
-  if (chosen?.needs && chosen.needs !== "ssh-endpoint") {
+  if (chosen?.needs) {
     const missing = await whatItNeeds(plan, flags, chosen.needs);
     if (missing) {
       return fail(EXIT.precondition, {

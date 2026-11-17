@@ -179,7 +179,13 @@ export function sanitiseCapture(capture, secrets) {
       ...(capture.readback ? { readback: { ...capture.readback, saw: readback.text } } : {}),
     },
     removed: [...new Set(removed)],
-    /* Counted and named, never claimed to be redacted. */
-    images: capture.screenshot ? [capture.screenshot] : [],
+    /* Counted and named, never claimed to be redacted — and that includes
+       the states a journey photographed on the way through. A count that
+       named fewer pictures than the comment publishes is the kind of number
+       that rots quietly, which is exactly what this report exists to stop. */
+    images: [
+      ...(capture.screenshot ? [capture.screenshot] : []),
+      ...(capture.alongside ?? []).map((shot) => shot.at),
+    ],
   };
 }
