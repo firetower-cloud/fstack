@@ -69,12 +69,15 @@ if (flags.help) {
   process.exit(EXIT.ok);
 }
 
-/* `limits` is the one command that needs nothing: no checkout, no key, no
-   stack. It is what an agent runs before writing the word "verified", and
-   making it depend on a running stack would be a reason not to run it. */
-if (command === "limits") process.exit(await limits(positional.slice(1), flags, repeated));
-
+/* `limits` needs no key and no running stack: it is what an agent runs
+   before writing the word "verified", and making it depend on a stack would
+   be a reason not to run it. `--touched` does need the checkout, because
+   reachability is a property of the import graph rather than of a filename —
+   and with no graph to walk, every path reads as outside. */
 const checkout = flags.checkout ?? findCheckout(process.cwd());
+
+if (command === "limits") process.exit(await limits(positional.slice(1), flags, repeated, checkout));
+
 if (!checkout) {
   process.exit(
     fail(EXIT.usage, {
@@ -211,34 +214,49 @@ async function api(plan, argv, flags) {
  * kept as data so a run can check the files a change touched against it. The
  * point of the exit code is that an agent can gate the word "verified" on it.
  */
-async function limits(argv, flags, repeated) {
+async function limits(argv, flags, repeated, checkout) {
   const target = flags.target ?? "frontend";
   const touched = repeated.touched ?? [];
 
   if (touched.length) {
-    const results = checkTouched(touched);
+    const results = checkTouched(touched, checkout);
     const blocked = results.filter((r) => !r.provable);
     if (flags.json) {
       return emit(
-        { target, touched: results, verdict: blocked.length ? "cannot-prove" : "within-transport" },
+        {
+          target,
+          checkout: checkout ?? null,
+          touched: results,
+          verdict: blocked.length ? "cannot-prove" : "within-transport",
+        },
         blocked.length ? EXIT.cannotProve : EXIT.ok,
       );
     }
     say("");
+    say(`  ${dim("limits --touched")}  ${checkout ? `import graph read from ${checkout}` : "NO CHECKOUT: no graph to walk, so every path reads as outside"}`);
+    say("");
     table([
       "Touched",
-      ...results.map((r) => [r.path, r.provable ? r.why : `OUTSIDE THIS TRANSPORT — ${r.why}`]),
+      ...results.flatMap((r) => [
+        [r.path, r.provable ? `INSIDE ${dim(`(${r.modules} module(s) read, none native)`)}` : `OUTSIDE THIS TRANSPORT ${dim(`(${r.how})`)}`],
+        ["", dim(r.chain.length > 1 ? r.chain.join(" -> ") : r.why)],
+      ]),
     ]);
     say("");
     if (!blocked.length) {
-      say("  Nothing you named is below the bridge. A Chrome run can carry a claim about");
-      say("  the React app here — about what it renders and what it sends, not about the shell.");
+      say("  Every path you named was positively established as inside: its whole reachable");
+      say("  import set was read and none of it is the native surface. A Chrome run can carry");
+      say("  a claim about what these render and what they send — never about the shell.");
       say("");
       return EXIT.ok;
     }
     return fail(EXIT.cannotProve, {
       problem: `${blocked.length} of ${results.length} path(s) are outside what a Chrome run proves`,
-      because: blocked.map((b) => `${b.path}: ${b.why}`),
+      because: blocked.flatMap((b) => [
+        `${b.path} — ${b.how}`,
+        b.chain.length > 1 ? `  ${b.chain.join(" -> ")}` : null,
+        `  ${b.why}`,
+      ]),
       instead: [
         'Do not write "verified". Write what you drove and what remains unexercised.',
         "",
@@ -247,6 +265,11 @@ async function limits(argv, flags, repeated) {
         "The shell transport is .github/workflows/desktop.yml's three-platform matrix.",
         "If the change matters, that is where the evidence has to come from — and some",
         "of these rows have no automated route at all.",
+        "",
+        "This is an allowlist with a closed default: a path is inside only where that can",
+        "be positively established by walking its imports. No checkout, an unreadable file",
+        "or a specifier that will not resolve all read as OUTSIDE, because not knowing that",
+        "a file reaches Tauri is not permission to claim it was proven.",
       ],
     });
   }

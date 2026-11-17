@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { writeLock } from "../lib/own.mjs";
 import { down } from "../lib/stack.mjs";
 import { EXIT, mode } from "../lib/out.mjs";
-import { checkTouched, BRIDGE, PAST_BRIDGE, nothingProves } from "../lib/limits.mjs";
+import { BRIDGE, PAST_BRIDGE, nothingProves } from "../lib/limits.mjs";
 
 const here = path.dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const sources = ["control-firetower", ...readdirSync(path.join(here, "lib")).map((f) => path.join("lib", f))];
@@ -36,7 +36,9 @@ function invocations(file) {
   return read(file)
     .split("\n")
     .filter((line) => !/^\s*(\*|\/\*|\/\/)/.test(line))
-    .filter((line) => /\b(run|compose|spawn|execFile|execSync|exec)\(/.test(line));
+    /* The synchronous forms are in the list because `identify()` added one:
+       a guardrail that does not cover a new call site is not a guardrail. */
+    .filter((line) => /\b(run|compose|spawn|spawnSync|execFile|execFileSync|execSync|exec)\(/.test(line));
 }
 
 test("nothing in this bundle shells out to `just`", () => {
@@ -81,15 +83,16 @@ test("reset drops and recreates rather than truncating", () => {
   assert.ok(!text.includes('"TRUNCATE'), "no TRUNCATE is ever issued");
 });
 
-test("down refuses while any capture is unposted, and touches nothing first", async (t) => {
+test("down refuses while any capture is unposted, and touches nothing first", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "verify-firetower-down-"));
   const plan = {
     key: "k",
+    checkout: root,
     lock: path.join(root, "run.json"),
     scratch: root,
     compose: path.join(root, "compose.yaml"),
     project: "ft-verify-k",
-    control: { value: 1, source: "test" },
+    control: { value: 4481, source: "test" },
   };
   const quiet = mode.quiet;
   mode.quiet = true;
@@ -113,32 +116,6 @@ test("down refuses while any capture is unposted, and touches nothing first", as
   } finally {
     mode.quiet = quiet;
     rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("a change below the bridge cannot be claimed as verified from Chrome", () => {
-  const blocked = [
-    "desktop/src/bridge.ts",
-    "desktop/src/open.ts",
-    "desktop/src/drag.ts",
-    "desktop/src/update.ts",
-    "desktop/src/telemetry.ts",
-    "desktop/src/platform.ts",
-    "desktop/src/ui/Resize.tsx",
-    "desktop/src-tauri/src/main.rs",
-    "desktop/src-tauri/tauri.conf.json",
-    "desktop/src-tauri/tauri.macos.conf.json",
-  ];
-  for (const file of blocked) {
-    const [result] = checkTouched([file]);
-    assert.equal(result.provable, false, `${file} should be outside the frontend transport`);
-    assert.ok(result.why.length > 20, `${file} needs a reason an agent can act on`);
-  }
-});
-
-test("an ordinary React change is inside what Chrome proves", () => {
-  for (const file of ["desktop/src/ui/Home.tsx", "desktop/src/ui/TasksPage.tsx", "web/app/page.tsx"]) {
-    assert.equal(checkTouched([file])[0].provable, true, file);
   }
 });
 

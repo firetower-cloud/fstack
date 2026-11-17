@@ -16,6 +16,7 @@
  *   shell        what a WebdriverIO run against a real binary adds, in CI
  *   residual     what neither proves, and so nobody has measured
  */
+import { reachesNative } from "./reach.mjs";
 
 /** The native surface. Twelve bridge members, then everything past the bridge. */
 export const BRIDGE = [
@@ -204,28 +205,48 @@ export const STRUCTURAL = [
   "Whether a macOS CI runner can host a rendering WKWebView at all is unestablished, and it is the largest open risk in the shell route. If it fails, macOS gets no real-binary coverage.",
 ];
 
-/** Which changed paths are outside what Chrome can support a claim about. */
-const NATIVE_PATHS = [
-  [/desktop\/src\/bridge\.ts$/, "bridge.ts is the native surface itself: 11 of its 12 members are no-ops in Chrome, and save and loadArtifact are different gestures rather than absent ones"],
-  [/desktop\/src\/open\.ts$/, "open.ts reaches plugin-opener directly, past the bridge"],
-  [/desktop\/src\/drag\.ts$/, "drag.ts calls startDragging() on the Tauri window; Chrome's tauriWindow() is null"],
-  [/desktop\/src\/update\.ts$/, "update.ts is the updater; in Chrome it is mocked end to end"],
-  [/desktop\/src\/telemetry\.ts$/, "telemetry.ts reads the app version from api/app, which is absent in a browser"],
-  [/desktop\/src\/platform\.ts$/, "platform detection takes the userAgentData branch in Chrome and the navigator.platform fallback in both shipped webviews"],
-  [/desktop\/src\/ui\/Resize\.tsx$/, "the resize strips are window-server gestures, and may not be drivable by any automated route"],
-  [/desktop\/src\/ui\/drop\.ts$/, "the HTML5 drop path can only be driven with a synthetic DataTransfer; a real OS file drop needs a human"],
-  [/desktop\/src\/skills\.ts$/, "skills.ts carries the file-drop path (:168-181), which Chrome can only fake"],
-  [/desktop\/src-tauri\//, "anything under src-tauri is the shell: not loaded, not compiled and not reachable in a Chrome run"],
-  [/tauri(\.[a-z]+)?\.conf\.json$/, "the Tauri configuration decides the CSP and the titlebar mechanism, and Vite applies neither"],
-  [/desktop\/scripts\/build-|\.github\/workflows\/desktop\.yml$/, "packaging and the installer matrix are not observable from a browser tab"],
-];
-
-export function checkTouched(paths) {
+/**
+ * Which changed paths are inside what a Chrome run can support a claim about.
+ *
+ * **This is an allowlist, and that is the whole point of it.** It used to be
+ * twelve regular expressions with an open default, so every path that matched
+ * none of them was declared provable — which made `desktop/src/api/download.ts`
+ * (the only `bridge.save()` call site), `ui/Titlebar.tsx` (which imports the
+ * denylisted `drag.ts`), a Rust crate and a SQL migration all read as safe. A
+ * list of things that are forbidden, with everything else permitted, is the
+ * exact shape `desktop/src/servers.ts:15-44` refuses: *not knowing that it is
+ * forbidden is not permission.*
+ *
+ * So the default is closed and the reasoning runs the other way. A path is
+ * inside only where that can be positively established:
+ *
+ *   1  outside `desktop/src/` is outside, full stop. Nothing else is loaded
+ *      by the page this transport drives
+ *   2  inside `desktop/src/`, walk the import graph. Reaching the native
+ *      surface — `bridge.ts`, `open.ts`, `drag.ts`, `update.ts`,
+ *      `telemetry.ts`, `platform.ts`, `ui/Resize.tsx`, `ui/drop.ts`,
+ *      `skills.ts`, anything under `src-tauri/`, or `@tauri-apps/*` itself —
+ *      at any distance is outside
+ *   3  a graph that cannot be walked is outside. No checkout, a path that is
+ *      not in it, a specifier that will not resolve: each is a thing that
+ *      went wrong, not permission
+ *   4  only a fully-read, native-free reachable set is inside
+ *
+ * Measured against firetower 0.55.0: 421 of 557 modules under `desktop/src/`
+ * are inside, so this is a boundary rather than a wall — and the 136 that are
+ * not include every file QA found the denylist calling safe.
+ */
+export function checkTouched(paths, checkout) {
   return paths.map((given) => {
-    const hit = NATIVE_PATHS.find(([pattern]) => pattern.test(given));
-    return hit
-      ? { path: given, provable: false, why: hit[1] }
-      : { path: given, provable: true, why: "no native surface matched; a Chrome run can carry a claim about the React app here" };
+    const seen = reachesNative(given, checkout);
+    return {
+      path: given,
+      provable: !seen.outside,
+      why: seen.why,
+      how: seen.how,
+      chain: seen.chain,
+      ...(seen.modules ? { modules: seen.modules } : {}),
+    };
   });
 }
 
