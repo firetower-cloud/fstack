@@ -44,6 +44,41 @@
  * Keep `expect` to the part of the line that carries the claim — a literal, a
  * name, a declaration. Quoting a whole line of formatting makes the test fail
  * on a reflow, which trains people to delete it.
+ *
+ * ---
+ *
+ * ## `where`: whether the line is the key or a hint
+ *
+ * **A bare line number is the most perishable thing a citation can be keyed
+ * on, and this ledger has the proof.** `states.mjs:484` was correct when it
+ * was written and stale within minutes: firetower#394 merged while this was
+ * being committed, moved those lines, and the check went red against `main`
+ * for a claim that had not changed at all. The claim was *the git-hosts
+ * screen uses `/^Connect$/`* — which does not depend on which line it sits
+ * on. Keying it to 484 made a sibling agent's unrelated edit look like drift.
+ *
+ *   where: "line"      the location is the claim. The quoted string has to be
+ *                      inside the cited range, and a move is a failure
+ *   where: "content"   the *content* is the claim. The string has to be
+ *                      somewhere in the file; `line` is a hint for a reader,
+ *                      and when the string has moved the check reports the
+ *                      new line instead of failing
+ *
+ * `"content"` is right whenever the point is "this screen uses this label" or
+ * "this member exists". `"line"` is right when the claim is about a
+ * particular place — a specific branch, a specific declaration among several
+ * that look alike.
+ *
+ * **A multi-string `expect` under `"content"` still has to hold together.**
+ * All of them must appear within `window` lines of the first — otherwise
+ * "these three labels are on this screen" would be satisfied by three strings
+ * scattered down a thousand-line file, which is a weaker claim than the one
+ * being made.
+ *
+ * Prose and ledger are keyed on `file:line` *within this repository*, and
+ * that pairing never rots on its own: both halves are here, and refreshing a
+ * hint means editing two lines in one commit. What `"content"` buys is that
+ * an upstream reflow no longer breaks a claim it did not touch.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -70,147 +105,169 @@ export function shippedFiles(skill) {
 
 export const CITATIONS = [
   /* ── The first-run screens, which the three journeys drive ───────────── */
-  { cite: "desktop/src/ui/Connect.tsx:204", expect: "Where is your Firetower?", claim: "the address screen's heading" },
-  { cite: "desktop/src/ui/Connect.tsx:214", expect: 'placeholder="ft-e1.tail9c2b.ts.net"', claim: "the address field" },
-  { cite: "desktop/src/ui/Connect.tsx:224", expect: "Continue", claim: "the address screen's button — read as Connect, driven as Continue" },
-  { cite: "desktop/src/ui/Connect.tsx:162", expect: 'stage.at === "who"', claim: "the screen the address step lands on" },
-  { cite: "desktop/src/ui/Connect.tsx:434", expect: "Who are you here?", claim: "the sign-in screen's heading" },
-  { cite: "desktop/src/ui/Connect.tsx:453", expect: 'placeholder="Username"', claim: "the username field" },
-  { cite: "desktop/src/ui/Connect.tsx:466", expect: 'placeholder="Password"', claim: "the password field" },
-  { cite: "desktop/src/ui/Connect.tsx:481", expect: "Sign in", claim: "the sign-in button" },
+  { cite: "desktop/src/ui/Connect.tsx:204", where: "content", expect: "Where is your Firetower?", claim: "the address screen's heading" },
+  { cite: "desktop/src/ui/Connect.tsx:214", where: "content", expect: 'placeholder="ft-e1.tail9c2b.ts.net"', claim: "the address field" },
+  { cite: "desktop/src/ui/Connect.tsx:224", where: "content", expect: "Continue", claim: "the address screen's button — read as Connect, driven as Continue" },
+  { cite: "desktop/src/ui/Connect.tsx:162", where: "content", expect: 'stage.at === "who"', claim: "the screen the address step lands on" },
+  { cite: "desktop/src/ui/Connect.tsx:434", where: "content", expect: "Who are you here?", claim: "the sign-in screen's heading" },
+  { cite: "desktop/src/ui/Connect.tsx:453", where: "content", expect: 'placeholder="Username"', claim: "the username field" },
+  { cite: "desktop/src/ui/Connect.tsx:466", where: "content", expect: 'placeholder="Password"', claim: "the password field" },
+  { cite: "desktop/src/ui/Connect.tsx:481", where: "content", expect: "Sign in", claim: "the sign-in button" },
   {
     cite: "desktop/src/ui/Connect.tsx:151-159",
+    where: "content",
     expect: ["ReplacePassword", 'retryLabel="Sign in again"', 'backLabel="Use a different address"'],
     claim: "the locked stage renders ReplacePassword with those two labels",
   },
-  { cite: "desktop/src/ui/Connect.tsx:398-402", expect: "mustChangePassword", claim: "signing in answers mustChangePassword and the locked stage follows" },
-  { cite: "desktop/src/ui/Connect.tsx:169-177", expect: ["remember(", "serverId"], claim: "a successful sign-in remembers the server" },
-  { cite: "desktop/src/ui/ReplacePassword.tsx:1-10", expect: "Replacing a password happens once", claim: "why the desktop carries no password form" },
-  { cite: "desktop/src/ui/Gate.tsx:46", expect: "<Setup", claim: "the setup wizard stands until setup is complete" },
-  { cite: "desktop/src/ui/Setup.tsx:40", expect: "Name this Firetower", claim: "the wizard's heading" },
-  { cite: "desktop/src/ui/Setup.tsx:43", expect: 'placeholder="Westlabs"', claim: "the organisation field" },
-  { cite: "desktop/src/ui/Setup.tsx:46", expect: "Continue", claim: "the wizard's button — the same word as the address screen, a different screen" },
-  { cite: "desktop/src/ui/Setup.tsx:56", expect: "is set up", claim: "the screen after naming" },
-  { cite: "desktop/src/ui/Setup.tsx:71", expect: "Open Firetower", claim: "the button that finishes setup" },
+  { cite: "desktop/src/ui/Connect.tsx:398-402", where: "content", expect: "mustChangePassword", claim: "signing in answers mustChangePassword and the locked stage follows" },
+  { cite: "desktop/src/ui/Connect.tsx:169-177", where: "content", expect: ["remember(", "serverId"], claim: "a successful sign-in remembers the server" },
+  { cite: "desktop/src/ui/ReplacePassword.tsx:1-10", where: "content", expect: "Replacing a password happens once", claim: "why the desktop carries no password form" },
+  { cite: "desktop/src/ui/Gate.tsx:46", where: "content", expect: "<Setup", claim: "the setup wizard stands until setup is complete" },
+  { cite: "desktop/src/ui/Setup.tsx:40", where: "content", expect: "Name this Firetower", claim: "the wizard's heading" },
+  { cite: "desktop/src/ui/Setup.tsx:43", where: "content", expect: 'placeholder="Westlabs"', claim: "the organisation field" },
+  { cite: "desktop/src/ui/Setup.tsx:46", where: "content", expect: "Continue", claim: "the wizard's button — the same word as the address screen, a different screen" },
+  { cite: "desktop/src/ui/Setup.tsx:56", where: "content", expect: "is set up", claim: "the screen after naming" },
+  { cite: "desktop/src/ui/Setup.tsx:71", where: "content", expect: "Open Firetower", claim: "the button that finishes setup" },
 
   /* ── The router, and the screens the states name ─────────────────────── */
-  { cite: "desktop/src/Routes.tsx:1-8", expect: "The screens, behind the hash router", claim: "the app is behind a hash router" },
-  { cite: "desktop/src/Routes.tsx:32", expect: '"/tasks"', claim: "the tasks route" },
-  { cite: "desktop/src/Routes.tsx:36", expect: '"/artifacts"', claim: "the artifacts route" },
-  { cite: "desktop/src/Routes.tsx:40", expect: '"/schedules"', claim: "the schedules route" },
-  { cite: "desktop/src/Routes.tsx:45", expect: '"/updates"', claim: "the updates route" },
-  { cite: "desktop/src/Routes.tsx:46", expect: '"/account"', claim: "the account route" },
+  { cite: "desktop/src/Routes.tsx:1-8", where: "content", expect: "The screens, behind the hash router", claim: "the app is behind a hash router" },
+  { cite: "desktop/src/Routes.tsx:32", where: "content", expect: '"/tasks"', claim: "the tasks route" },
+  { cite: "desktop/src/Routes.tsx:36", where: "content", expect: '"/artifacts"', claim: "the artifacts route" },
+  { cite: "desktop/src/Routes.tsx:40", where: "content", expect: '"/schedules"', claim: "the schedules route" },
+  { cite: "desktop/src/Routes.tsx:45", where: "content", expect: '"/updates"', claim: "the updates route" },
+  { cite: "desktop/src/Routes.tsx:46", where: "content", expect: '"/account"', claim: "the account route" },
   { cite: "desktop/src/Routes.tsx:54", expect: "<Home", claim: "the fallthrough, which is the home" },
-  { cite: "desktop/src/ui/destinations.ts:79", expect: ['label: "Customize"', "/configuration/skills"], claim: "where the rail's Customize goes" },
-  { cite: "desktop/src/ui/destinations.ts:81", expect: ['label: "Repositories"', "/configuration/repositories"], claim: "the repositories destination" },
-  { cite: "desktop/src/ui/config/panes.ts:50", expect: 'label: "Profiles"', claim: "the configuration index's word for the profiles pane" },
+  { cite: "desktop/src/ui/destinations.ts:79", where: "content", expect: ['label: "Customize"', "/configuration/skills"], claim: "where the rail's Customize goes" },
+  { cite: "desktop/src/ui/destinations.ts:81", where: "content", expect: ['label: "Repositories"', "/configuration/repositories"], claim: "the repositories destination" },
+  { cite: "desktop/src/ui/config/panes.ts:50", where: "content", expect: 'label: "Profiles"', claim: "the configuration index's word for the profiles pane" },
   {
     cite: "desktop/src/ui/RailPanel.tsx:497",
+    where: "content",
     expect: 'label="Agent profiles"',
     claim: "the rail panel's row is Agent profiles, not Profiles — which the map got the wrong way round",
   },
 
   /* ── The screens the feature map drives ──────────────────────────────── */
-  { cite: "desktop/src/ui/config/Roles.tsx:261", expect: 'label="New profile"', claim: "the button that opens the create menu" },
-  { cite: "desktop/src/ui/config/Roles.tsx:283", expect: 'title="Agent profiles"', claim: "the screen's own heading at /configuration/roles" },
-  { cite: "desktop/src/ui/config/Roles.tsx:995", expect: "New profile", claim: "the draft's heading" },
-  { cite: "desktop/src/ui/config/CreateMenu.tsx:43-48", expect: 'role="menu"', claim: "what New profile opens" },
+  { cite: "desktop/src/ui/config/Roles.tsx:261", where: "content", expect: 'label="New profile"', claim: "the button that opens the create menu" },
+  { cite: "desktop/src/ui/config/Roles.tsx:283", where: "content", expect: 'title="Agent profiles"', claim: "the screen's own heading at /configuration/roles" },
+  { cite: "desktop/src/ui/config/Roles.tsx:995", where: "content", expect: "New profile", claim: "the draft's heading" },
+  { cite: "desktop/src/ui/config/CreateMenu.tsx:43-48", where: "content", expect: 'role="menu"', claim: "what New profile opens" },
   {
     cite: "desktop/src/ui/TasksPage.tsx:304-315",
+    where: "content",
     expect: ["No tracker connected", "Connect your task tracker", "/configuration/trackers"],
     claim: "the empty tasks screen and where its button goes",
   },
-  { cite: "desktop/src/ui/config/Repos.tsx:71", expect: 'const PASTE = "paste"', claim: "the picker's paste-a-remote choice" },
-  { cite: "desktop/src/ui/config/Repos.tsx:137-141", expect: "Pick a git host to start from", claim: "the onboarding copy a dead server used to draw" },
-  { cite: "desktop/src/ui/config/Repos.tsx:143-149", expect: "const bare", claim: "when the repositories screen counts as bare" },
-  { cite: "desktop/src/ui/config/Repos.tsx:520-531", expect: ["Paste a remote", "All hosts"], claim: "the host picker" },
-  { cite: "desktop/src/ui/config/Repos.tsx:575-588", expect: "Paste a remote", claim: "the Paste a remote row" },
-  { cite: "desktop/src/ui/config/Repos.tsx:821", expect: 'placeholder="git@github.com:acme/web.git"', claim: "the remote field" },
-  { cite: "desktop/src/ui/config/Repos.tsx:795-860", expect: "function Paste(", claim: "the paste-a-remote form" },
-  { cite: "desktop/src/ui/config/Repos.tsx:849", expect: ["Add it", "Save it anyway"], claim: "the button, which is Add it only once a machine has answered" },
-  { cite: "desktop/src/ui/config/Machines.tsx:636-640", expect: "WorkerMissing", claim: "the probe's answer decides what the dialog offers" },
+  { cite: "desktop/src/ui/config/Repos.tsx:71", where: "content", expect: 'const PASTE = "paste"', claim: "the picker's paste-a-remote choice" },
+  { cite: "desktop/src/ui/config/Repos.tsx:137-141", where: "content", expect: "Pick a git host to start from", claim: "the onboarding copy a dead server used to draw" },
+  { cite: "desktop/src/ui/config/Repos.tsx:143-149", where: "content", expect: "const bare", claim: "when the repositories screen counts as bare" },
+  { cite: "desktop/src/ui/config/Repos.tsx:520-531", where: "content", expect: ["Paste a remote", "All hosts"], claim: "the host picker" },
+  { cite: "desktop/src/ui/config/Repos.tsx:575-588", where: "content", expect: "Paste a remote", claim: "the Paste a remote row" },
+  { cite: "desktop/src/ui/config/Repos.tsx:821", where: "content", expect: 'placeholder="git@github.com:acme/web.git"', claim: "the remote field" },
+  { cite: "desktop/src/ui/config/Repos.tsx:795-860", where: "content", expect: "function Paste(", claim: "the paste-a-remote form" },
+  { cite: "desktop/src/ui/config/Repos.tsx:849", where: "content", expect: ["Add it", "Save it anyway"], claim: "the button, which is Add it only once a machine has answered" },
+  { cite: "desktop/src/ui/config/Machines.tsx:636-640", where: "content", expect: "WorkerMissing", claim: "the probe's answer decides what the dialog offers" },
   { cite: "desktop/src/ui/Configuration.tsx:98-110", expect: "from this Mac?", claim: "the disconnect confirmation" },
   { cite: "desktop/src/ui/Configuration.tsx:103-110", expect: "from this Mac?", claim: "the disconnect confirmation's question" },
-  { cite: "desktop/src/ui/Confirm.tsx:81-83", expect: ['role="dialog"', "{q.title}"], claim: "the dialog's heading is its title" },
+  { cite: "desktop/src/ui/Confirm.tsx:81-83", where: "content", expect: ['role="dialog"', "{q.title}"], claim: "the dialog's heading is its title" },
 
   /* ── The checkout's own harnesses, where this bundle still points at
        them. Line-pinned citations into these two were the whole of D2; what
        is left is the doctrine comment and the handles that were re-driven
        and found correct. ──────────────────────────────────────────────── */
-  { cite: "desktop/scripts/states.mjs:11-13", expect: "A state this build cannot reach is the finding", claim: "the doctrine this bundle follows" },
-  { cite: "desktop/scripts/states.mjs:35", expect: ["viewport", "deviceScaleFactor"], claim: "the viewport every capture is taken at" },
-  { cite: "desktop/scripts/states.mjs:72", expect: "const at = (page, path", claim: "hash navigation" },
-  { cite: "desktop/scripts/states.mjs:85", expect: 'at(page, "/tasks", 1500)', claim: "the settle for the tasks screen" },
-  { cite: "desktop/scripts/states.mjs:111", expect: '"/configuration/machines", 1400', claim: "the settle for the machines screen" },
-  { cite: "desktop/scripts/states.mjs:110-117", expect: ["probeMachine", 'getByPlaceholder("192.0.2.10")'], claim: "the add-a-machine dialog's handles" },
-  { cite: "desktop/scripts/states.mjs:484", expect: "/^Connect$/", claim: "the git-hosts screen's Connect, which is current and correct" },
+  { cite: "desktop/scripts/states.mjs:11-13", where: "content", expect: "A state this build cannot reach is the finding", claim: "the doctrine this bundle follows" },
+  { cite: "desktop/scripts/states.mjs:35", where: "content", expect: ["viewport", "deviceScaleFactor"], claim: "the viewport every capture is taken at" },
+  { cite: "desktop/scripts/states.mjs:72", where: "content", expect: "const at = (page, path", claim: "hash navigation" },
+  { cite: "desktop/scripts/states.mjs:85", where: "content", expect: 'at(page, "/tasks", 1500)', claim: "the settle for the tasks screen" },
+  { cite: "desktop/scripts/states.mjs:111", where: "content", expect: '"/configuration/machines", 1400', claim: "the settle for the machines screen" },
+  { cite: "desktop/scripts/states.mjs:110-117", where: "content", expect: ["probeMachine", 'getByPlaceholder("192.0.2.10")'], claim: "the add-a-machine dialog's handles" },
+  {
+    /**
+     * The citation that proved the point, so it is kept as the worked example.
+     *
+     * Written as `:484` and correct then; firetower#394 merged minutes later,
+     * removed the second of the two `/^Connect$/` handles — one of the
+     * unreachable states it was fixing — and moved the survivor to 500. The
+     * claim never changed. It is content-anchored now.
+     *
+     * **The expect is the button call, not the bare regex.** #394 also added a
+     * comment quoting `/^Connect$/` while explaining firetower#381, and that
+     * comment is *above* the handle: anchoring on the regex alone would latch
+     * onto prose about the handle instead of the handle. Anchor on the thing
+     * the claim is about.
+     */
+    cite: "desktop/scripts/states.mjs:500",
+    where: "content",
+    expect: 'getByRole("button", { name: /^Connect$/ })',
+    claim: "the git-hosts screen's Connect, which is current and correct",
+  },
 
   /* ── The control plane ───────────────────────────────────────────────── */
   { cite: "crates/ft-server/src/api.rs:194-196", expect: "server_id", claim: "/bootstrap has no serverId until setup finishes" },
-  { cite: "crates/ft-server/src/api/setup.rs:26-30", expect: "needs_password", claim: "the server's own word for the password gate" },
-  { cite: "crates/ft-server/src/accounts.rs:47", expect: "MINIMUM_PASSWORD", claim: "the shortest password the server accepts" },
-  { cite: "crates/ft-server/src/accounts.rs:117-128", expect: "named_at", claim: "being named is what set up means" },
+  { cite: "crates/ft-server/src/api/setup.rs:26-30", where: "content", expect: "needs_password", claim: "the server's own word for the password gate" },
+  { cite: "crates/ft-server/src/accounts.rs:47", where: "content", expect: "MINIMUM_PASSWORD", claim: "the shortest password the server accepts" },
+  { cite: "crates/ft-server/src/accounts.rs:117-128", where: "content", expect: "named_at", claim: "being named is what set up means" },
   { cite: "crates/ft-server/src/accounts.rs:193-201", expect: "must_change_password", claim: "the first administrator is created with the flag set" },
-  { cite: "crates/ft-server/src/accounts.rs:743-775", expect: ["set_password", "must_change_password = FALSE"], claim: "passwd clears the flag in the same statement" },
-  { cite: "crates/ft-server/src/lib.rs:383-391", expect: ["ensure_admin", "any_user"], claim: "ADMIN_INITIAL_PASSWORD is read only while no user exists" },
-  { cite: "crates/ft-server/src/lib.rs:383-427", expect: "ensure_admin", claim: "how the seeded administrator is made" },
-  { cite: "crates/ft-server/src/lib.rs:402-426", expect: "MINIMUM_PASSWORD", claim: "a short seeded password warns rather than refusing" },
-  { cite: "crates/ft-server/src/lib.rs:631", expect: "fn cors", claim: "--dev is the only branch that reaches AllowOrigin::any()" },
+  { cite: "crates/ft-server/src/accounts.rs:743-775", where: "content", expect: ["set_password", "must_change_password = FALSE"], claim: "passwd clears the flag in the same statement" },
+  { cite: "crates/ft-server/src/lib.rs:383-391", where: "content", expect: ["ensure_admin", "any_user"], claim: "ADMIN_INITIAL_PASSWORD is read only while no user exists" },
+  { cite: "crates/ft-server/src/lib.rs:383-427", where: "content", expect: "ensure_admin", claim: "how the seeded administrator is made" },
+  { cite: "crates/ft-server/src/lib.rs:402-426", where: "content", expect: "MINIMUM_PASSWORD", claim: "a short seeded password warns rather than refusing" },
+  { cite: "crates/ft-server/src/lib.rs:631", where: "content", expect: "fn cors", claim: "--dev is the only branch that reaches AllowOrigin::any()" },
   { cite: "crates/ft-server/src/api/auth.rs:195", expect: "restart", claim: "tokens do not survive a restart" },
-  { cite: "crates/ft-server/src/api/repos.rs:634-647", expect: "no_machine", claim: "the remote probe is answered by a machine, not the control plane" },
-  { cite: "crates/ft-worker/src/lib.rs:941", expect: "remove_dir_all", claim: "the workspace is deleted when the session ends" },
-  { cite: "crates/ft-worker/src/docker.rs:206", expect: "SESSION_LABEL", claim: "Firetower's own teardown sweeps by the session label" },
-  { cite: "compose.yaml:71-72", expect: "refuses to bind", claim: "why the compose file sets what it sets" },
+  { cite: "crates/ft-server/src/api/repos.rs:634-647", where: "content", expect: "no_machine", claim: "the remote probe is answered by a machine, not the control plane" },
+  { cite: "crates/ft-worker/src/lib.rs:941", where: "content", expect: "remove_dir_all", claim: "the workspace is deleted when the session ends" },
+  { cite: "crates/ft-worker/src/docker.rs:206", where: "content", expect: "SESSION_LABEL", claim: "Firetower's own teardown sweeps by the session label" },
+  { cite: "compose.yaml:71-72", where: "content", expect: "refuses to bind", claim: "why the compose file sets what it sets" },
 
   /* ── The native surface, which is what `limits` is about ─────────────── */
-  { cite: "desktop/src/servers.ts:15-44", expect: "Not knowing that it is forbidden is not permission", claim: "the rule this bundle's ownership model is taken from" },
-  { cite: "desktop/src/bridge.ts:49", expect: "native: boolean", claim: "the bridge member a browser answers false for" },
-  { cite: "desktop/src/bridge.ts:50", expect: "setTitle", claim: "a bridge member that differs by running anyway" },
-  { cite: "desktop/src/bridge.ts:51-52", expect: "setBadge", claim: "the dock badge" },
-  { cite: "desktop/src/bridge.ts:53", expect: "notify", claim: "OS notifications" },
-  { cite: "desktop/src/bridge.ts:54", expect: "minimize", claim: "window controls" },
-  { cite: "desktop/src/bridge.ts:55", expect: "zoom", claim: "window controls" },
-  { cite: "desktop/src/bridge.ts:56", expect: "close()", claim: "window controls" },
-  { cite: "desktop/src/bridge.ts:62-65", expect: "not* the same gesture dressed differently", claim: "the file's own warning about save" },
-  { cite: "desktop/src/bridge.ts:67-72", expect: "save(", claim: "the save signature" },
-  { cite: "desktop/src/bridge.ts:81", expect: "shoot", claim: "screenshots" },
-  { cite: "desktop/src/bridge.ts:93", expect: "canShoot", claim: "whether screenshots are available" },
-  { cite: "desktop/src/bridge.ts:103", expect: "loadArtifact", claim: "the mixed-content path a browser never takes" },
-  { cite: "desktop/src/bridge.ts:104-105", expect: "secrets", claim: "the keychain" },
-  { cite: "desktop/src/bridge.ts:164", expect: "native: false", claim: "the browser implementation says so by construction" },
-  { cite: "desktop/src/bridge.ts:165", expect: "document.title", claim: "setTitle in a browser sets document.title, a different thing" },
-  { cite: "desktop/src/bridge.ts:166", expect: "setBadge: () => {}", claim: "setBadge is a no-op in a browser" },
-  { cite: "desktop/src/bridge.ts:167", expect: "notify: () => {}", claim: "notify is a no-op in a browser" },
-  { cite: "desktop/src/bridge.ts:175-194", expect: ["createObjectURL", "a.download"], claim: "the browser save branch: fetch, a blob and an a download" },
-  { cite: "desktop/src/bridge.ts:195", expect: "shoot: async () => null", claim: "shoot answers null in a browser" },
-  { cite: "desktop/src/bridge.ts:196", expect: "canShoot: async () => false", claim: "canShoot answers false in a browser" },
-  { cite: "desktop/src/bridge.ts:197", expect: "loadArtifact: null", claim: "loadArtifact is null in a browser, so the mixed-content refusal never happens" },
-  { cite: "desktop/src/bridge.ts:198", expect: "secrets: null", claim: "no keychain in a browser" },
-  { cite: "desktop/src/open.ts:11-19", expect: "openExternal", claim: "a module that imports @tauri-apps past the bridge" },
-  { cite: "desktop/src/open.ts:18", expect: "window.open(", claim: "the browser falls back to window.open" },
-  { cite: "desktop/src/drag.ts:1-26", expect: "app-region", claim: "why titlebar drag is not drivable" },
-  { cite: "desktop/src/drag.ts:33-38", expect: "mouseup", claim: "the webview usually never sees the mouseup" },
-  { cite: "desktop/src/drag.ts:60-91", expect: "tauriWindow", claim: "the drag implementation" },
-  { cite: "desktop/src/update.ts:80-146", expect: "plugin-updater", claim: "the updater" },
-  { cite: "desktop/src/telemetry.ts:92", expect: "@tauri-apps/api/app", claim: "the app version comes from a native import" },
-  { cite: "desktop/src/platform.ts:28-38", expect: "function detect()", claim: "platform detection" },
-  { cite: "desktop/src/skills.ts:168-181", expect: "readDrop", claim: "the HTML5 file-drop path" },
-  { cite: "desktop/src/ui/Titlebar.tsx:29", expect: '"~/drag"', claim: "nothing in the name says native, and line 29 imports drag" },
+  { cite: "desktop/src/servers.ts:15-44", where: "content", expect: "Not knowing that it is forbidden is not permission", claim: "the rule this bundle's ownership model is taken from" },
+  { cite: "desktop/src/bridge.ts:49", where: "content", expect: "native: boolean", claim: "the bridge member a browser answers false for" },
+  { cite: "desktop/src/bridge.ts:50", where: "content", expect: "setTitle", claim: "a bridge member that differs by running anyway" },
+  { cite: "desktop/src/bridge.ts:51-52", where: "content", expect: "setBadge", claim: "the dock badge" },
+  { cite: "desktop/src/bridge.ts:53", where: "content", expect: "notify", claim: "OS notifications" },
+  { cite: "desktop/src/bridge.ts:54", where: "content", expect: "minimize", claim: "window controls" },
+  { cite: "desktop/src/bridge.ts:55", where: "content", expect: "zoom", claim: "window controls" },
+  { cite: "desktop/src/bridge.ts:56", where: "content", expect: "close()", claim: "window controls" },
+  { cite: "desktop/src/bridge.ts:62-65", where: "content", expect: "not* the same gesture dressed differently", claim: "the file's own warning about save" },
+  { cite: "desktop/src/bridge.ts:67-72", where: "content", expect: "save(", claim: "the save signature" },
+  { cite: "desktop/src/bridge.ts:81", where: "content", expect: "shoot", claim: "screenshots" },
+  { cite: "desktop/src/bridge.ts:93", where: "content", expect: "canShoot", claim: "whether screenshots are available" },
+  { cite: "desktop/src/bridge.ts:103", where: "content", expect: "loadArtifact", claim: "the mixed-content path a browser never takes" },
+  { cite: "desktop/src/bridge.ts:104-105", where: "content", expect: "secrets", claim: "the keychain" },
+  { cite: "desktop/src/bridge.ts:164", where: "content", expect: "native: false", claim: "the browser implementation says so by construction" },
+  { cite: "desktop/src/bridge.ts:165", where: "content", expect: "document.title", claim: "setTitle in a browser sets document.title, a different thing" },
+  { cite: "desktop/src/bridge.ts:166", where: "content", expect: "setBadge: () => {}", claim: "setBadge is a no-op in a browser" },
+  { cite: "desktop/src/bridge.ts:167", where: "content", expect: "notify: () => {}", claim: "notify is a no-op in a browser" },
+  { cite: "desktop/src/bridge.ts:175-194", where: "content", expect: ["createObjectURL", "a.download"], claim: "the browser save branch: fetch, a blob and an a download" },
+  { cite: "desktop/src/bridge.ts:195", where: "content", expect: "shoot: async () => null", claim: "shoot answers null in a browser" },
+  { cite: "desktop/src/bridge.ts:196", where: "content", expect: "canShoot: async () => false", claim: "canShoot answers false in a browser" },
+  { cite: "desktop/src/bridge.ts:197", where: "content", expect: "loadArtifact: null", claim: "loadArtifact is null in a browser, so the mixed-content refusal never happens" },
+  { cite: "desktop/src/bridge.ts:198", where: "content", expect: "secrets: null", claim: "no keychain in a browser" },
+  { cite: "desktop/src/open.ts:11-19", where: "content", expect: "openExternal", claim: "a module that imports @tauri-apps past the bridge" },
+  { cite: "desktop/src/open.ts:18", where: "content", expect: "window.open(", claim: "the browser falls back to window.open" },
+  { cite: "desktop/src/drag.ts:1-26", where: "content", expect: "app-region", claim: "why titlebar drag is not drivable" },
+  { cite: "desktop/src/drag.ts:33-38", where: "content", expect: "mouseup", claim: "the webview usually never sees the mouseup" },
+  { cite: "desktop/src/drag.ts:60-91", where: "content", expect: "tauriWindow", claim: "the drag implementation" },
+  { cite: "desktop/src/update.ts:80-146", where: "content", expect: "plugin-updater", claim: "the updater" },
+  { cite: "desktop/src/telemetry.ts:92", where: "content", expect: "@tauri-apps/api/app", claim: "the app version comes from a native import" },
+  { cite: "desktop/src/platform.ts:28-38", where: "content", expect: "function detect()", claim: "platform detection" },
+  { cite: "desktop/src/skills.ts:168-181", where: "content", expect: "readDrop", claim: "the HTML5 file-drop path" },
+  { cite: "desktop/src/ui/Titlebar.tsx:29", where: "content", expect: '"~/drag"', claim: "nothing in the name says native, and line 29 imports drag" },
   { cite: "desktop/src-tauri/src/capture.rs:277", expect: "SUPPORTED: bool = true", claim: "canShoot's macOS value" },
   { cite: "desktop/src-tauri/src/capture.rs:375", expect: "SUPPORTED: bool = true", claim: "canShoot's Windows value" },
   { cite: "desktop/src-tauri/src/capture.rs:501-503", expect: "SUPPORTED: bool = false", claim: "canShoot's value everywhere else" },
-  { cite: "desktop/src-tauri/src/main.rs:48", expect: "tray::waiting", claim: "the tray is reached" },
-  { cite: "desktop/src-tauri/src/main.rs:353", expect: "window_state", claim: "window state and its persistence" },
-  { cite: "desktop/src-tauri/src/main.rs:411-414", expect: "Windows", claim: "the keychain on Windows has never been measured" },
-  { cite: "desktop/src-tauri/tauri.conf.json:21", expect: '"decorations": false', claim: "custom chrome" },
-  { cite: "desktop/src-tauri/tauri.conf.json:28", expect: '"csp"', claim: "the CSP that only a real binary applies" },
-  { cite: "desktop/src-tauri/tauri.macos.conf.json:11-15", expect: '"dragDropEnabled": false', claim: "Tauri's own drag-drop handler is off" },
+  { cite: "desktop/src-tauri/src/main.rs:48", where: "content", expect: "tray::waiting", claim: "the tray is reached" },
+  { cite: "desktop/src-tauri/src/main.rs:353", where: "content", expect: "window_state", claim: "window state and its persistence" },
+  { cite: "desktop/src-tauri/src/main.rs:411-414", where: "content", expect: "Windows", claim: "the keychain on Windows has never been measured" },
+  { cite: "desktop/src-tauri/tauri.conf.json:21", where: "content", expect: '"decorations": false', claim: "custom chrome" },
+  { cite: "desktop/src-tauri/tauri.conf.json:28", where: "content", expect: '"csp"', claim: "the CSP that only a real binary applies" },
+  { cite: "desktop/src-tauri/tauri.macos.conf.json:11-15", where: "content", expect: '"dragDropEnabled": false', claim: "Tauri's own drag-drop handler is off" },
 
   /* ── The build, and the ports nothing may derive ─────────────────────── */
-  { cite: "desktop/vite.config.ts:15", expect: ["5273", "strictPort"], claim: "the renderer port is hardcoded, so --port is a flag only" },
-  { cite: "desktop/vite.config.ts:17", expect: "alias", claim: "how ~ resolves, which the import walk has to follow" },
-  { cite: "desktop/tsconfig.json:15", expect: '"paths"', claim: "the other half of how ~ resolves" },
-  { cite: "web/playwright.config.ts:13", expect: "reuseExistingServer", claim: "the failure this bundle refuses to repeat, one line long" },
+  { cite: "desktop/vite.config.ts:15", where: "content", expect: ["5273", "strictPort"], claim: "the renderer port is hardcoded, so --port is a flag only" },
+  { cite: "desktop/vite.config.ts:17", where: "content", expect: "alias", claim: "how ~ resolves, which the import walk has to follow" },
+  { cite: "desktop/tsconfig.json:15", where: "content", expect: '"paths"', claim: "the other half of how ~ resolves" },
+  { cite: "web/playwright.config.ts:13", where: "content", expect: "reuseExistingServer", claim: "the failure this bundle refuses to repeat, one line long" },
 ];
 
 /** Index by basename and line span, which is how prose spells a citation. */
@@ -269,20 +326,27 @@ export function indexCheckout(checkout) {
 /**
  * Re-read every citation in the ledger against a checkout.
  *
- * Returns `{ checked, findings }`. A finding is one of:
+ * Returns `{ checked, findings, moved }`. A finding is one of:
  *   unresolved   the file is not in the checkout, or more than one matches
  *   past-eof     the cited line is beyond the end of the file
- *   missing      the cited range no longer contains what is claimed
+ *   missing      what is claimed is not there any more
+ *   scattered    a content citation's strings are no longer near each other
+ *
+ * `moved` is not a finding. It is a content citation whose string is still
+ * there at a different line: the claim holds, and the hint wants refreshing
+ * when somebody is next in here.
  */
 export function checkCitations(checkout, { index } = {}) {
   const byName = index ?? indexCheckout(checkout);
   const findings = [];
+  const moved = [];
   const cache = new Map();
   let checked = 0;
 
   for (const entry of CITATIONS) {
     const [file, lines] = split(entry.cite);
     const [a, b] = span(lines);
+    const byContent = entry.where === "content";
     const candidates = (byName.get(path.basename(file)) ?? []).filter(
       (p) => p === file || p.endsWith(`/${file}`) || path.basename(p) === file,
     );
@@ -302,6 +366,8 @@ export function checkCitations(checkout, { index } = {}) {
     const at = resolved[0];
     if (!cache.has(at)) cache.set(at, readFileSync(path.join(checkout, at), "utf8").split("\n"));
     const all = cache.get(at);
+    /* Past the end of the file is a failure either way: a hint that points
+       into nothing is no use to a reader, and under `"line"` it is the claim. */
     if (a > all.length) {
       findings.push({
         kind: "past-eof",
@@ -313,21 +379,90 @@ export function checkCitations(checkout, { index } = {}) {
     }
     checked++;
     if (entry.expect === null) continue;
-    const text = all.slice(a - 1, Math.min(b, all.length)).join("\n");
-    for (const want of [entry.expect].flat()) {
-      if (!text.includes(want)) {
-        findings.push({
-          kind: "missing",
-          cite: entry.cite,
-          claim: entry.claim,
-          want,
-          why: `${at}:${lines} no longer contains ${JSON.stringify(want)}`,
-          saw: all[a - 1]?.trim().slice(0, 120) ?? "",
-        });
+    const wants = [entry.expect].flat();
+
+    if (!byContent) {
+      const text = all.slice(a - 1, Math.min(b, all.length)).join("\n");
+      for (const want of wants) {
+        if (!text.includes(want)) {
+          findings.push({
+            kind: "missing",
+            cite: entry.cite,
+            claim: entry.claim,
+            want,
+            why: `${at}:${lines} no longer contains ${JSON.stringify(want)}`,
+            saw: all[a - 1]?.trim().slice(0, 120) ?? "",
+          });
+        }
       }
+      continue;
+    }
+
+    /**
+     * Content anchoring: *somewhere* in this file, all of these appear
+     * together.
+     *
+     * Every occurrence of the first string is a candidate, not just the first
+     * one — anchoring on the first occurrence and demanding the rest be near
+     * it reported three false `scattered` findings the moment it ran.
+     * `"ReplacePassword"` first appears on its import line, nine hundred
+     * lines above the stage that renders it; `"set_password"` is a substring
+     * of `reset_password`, which is declared earlier in the same file. The
+     * claim is not "the first match is the right one", it is "there is a
+     * place where these hold together", so each candidate is tried.
+     *
+     * Candidates are tried nearest-to-the-hint first, so a file with several
+     * genuine matches resolves to the one the ledger meant and `moved` stays
+     * quiet instead of reporting churn.
+     */
+    const window = Math.max(entry.window ?? b - a + 1, 12);
+    const anchors = all
+      .map((line, i) => (line.includes(wants[0]) ? i : -1))
+      .filter((i) => i !== -1)
+      .sort((x, y) => Math.abs(x + 1 - a) - Math.abs(y + 1 - a));
+    if (!anchors.length) {
+      findings.push({
+        kind: "missing",
+        cite: entry.cite,
+        claim: entry.claim,
+        want: wants[0],
+        why: `${at} no longer contains ${JSON.stringify(wants[0])} anywhere`,
+        saw: all[a - 1]?.trim().slice(0, 120) ?? "",
+      });
+      continue;
+    }
+    const holds = (i) => {
+      const near = all.slice(Math.max(0, i - window), i + window + 1).join("\n");
+      return wants.slice(1).every((want) => near.includes(want));
+    };
+    const found = anchors.find(holds);
+    if (found === undefined) {
+      const missingHere = wants
+        .slice(1)
+        .filter((want) => !all.slice(Math.max(0, anchors[0] - window), anchors[0] + window + 1).join("\n").includes(want));
+      findings.push({
+        kind: "scattered",
+        cite: entry.cite,
+        claim: entry.claim,
+        want: missingHere[0],
+        why:
+          `${at} contains ${JSON.stringify(wants[0])} at line(s) ${anchors.slice(0, 4).map((i) => i + 1).join(", ")}, ` +
+          `and at none of them is ${JSON.stringify(missingHere[0])} within ${window} lines`,
+        saw: all[anchors[0]]?.trim().slice(0, 120) ?? "",
+      });
+      continue;
+    }
+    if (found + 1 < a || found + 1 > b) {
+      moved.push({
+        cite: entry.cite,
+        claim: entry.claim,
+        now: `${path.basename(file)}:${found + 1}`,
+        from: `${path.basename(file)}:${lines}`,
+        at: found + 1,
+      });
     }
   }
-  return { checked, findings };
+  return { checked, findings, moved };
 }
 
 /**

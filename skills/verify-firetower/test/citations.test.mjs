@@ -68,7 +68,7 @@ test("every citation in the ledger still says what the bundle claims", (t) => {
     );
     return;
   }
-  const { checked, findings } = checkCitations(co);
+  const { checked, findings, moved } = checkCitations(co);
   assert.deepEqual(
     findings,
     [],
@@ -78,6 +78,18 @@ test("every citation in the ledger still says what the bundle claims", (t) => {
       "\n  origin is stale is worse than no copy.\n",
   );
   assert.ok(checked > 100, `only ${checked} citations were read, which is fewer than this bundle ships`);
+  /**
+   * Hints that have drifted. **Not a failure**, by design: for a
+   * content-anchored citation the line is a convenience for a reader and the
+   * string is the claim, so an upstream reflow must not turn a true statement
+   * red. Said out loud anyway, because a hint nobody refreshes eventually
+   * sends somebody to the wrong place — and this is the list to paste from
+   * when refreshing them.
+   */
+  if (moved.length) {
+    t.diagnostic(`${moved.length} content citation(s) have moved. The claims hold; the hints want refreshing:`);
+    for (const m of moved) t.diagnostic(`  ${m.from} -> ${m.now}   (${m.claim})`);
+  }
 });
 
 test("every citation written in the bundle is registered in the ledger", () => {
@@ -140,6 +152,44 @@ test("every ledger entry says what it is claiming", () => {
       entry.expect === null || typeof entry.expect === "string" || Array.isArray(entry.expect),
       `${entry.cite} has an expect that is neither a string, an array nor null`,
     );
+    assert.ok(
+      entry.where === undefined || entry.where === "line" || entry.where === "content",
+      `${entry.cite} has where: ${JSON.stringify(entry.where)}, and the two anchors are "line" and "content"`,
+    );
+    /* A content anchor needs something to anchor *on*. `where: "content"`
+       with nothing quoted would check that the file exists and call it a
+       verified claim, which is the shape of reassurance this module exists
+       to remove. */
+    assert.ok(
+      entry.where !== "content" || entry.expect !== null,
+      `${entry.cite} is content-anchored and quotes nothing, so there is nothing to anchor on`,
+    );
+  }
+});
+
+/**
+ * Most of this ledger should be content-anchored, and the exceptions should be
+ * deliberate.
+ *
+ * A line number is the perishable half of a citation — firetower#394 moved one
+ * minutes after it was written — so `"line"` is for the cases where the
+ * occurrence genuinely is the claim: `<Home` appears twice in `Routes.tsx` and
+ * only the second is the fallthrough; `SUPPORTED: bool = true` appears once
+ * for macOS and once for Windows. Those must stay keyed on the line. This
+ * guards the ratio rather than the list, so adding one is fine and quietly
+ * reverting to line-keyed citations wholesale is not.
+ */
+test("the ledger prefers content anchoring, and says so where it does not", () => {
+  const byLine = CITATIONS.filter((c) => c.where !== "content");
+  assert.ok(
+    byLine.length < CITATIONS.length / 4,
+    `${byLine.length} of ${CITATIONS.length} citations are keyed on a line number, which is the perishable form:\n` +
+      byLine.map((c) => `  ${c.cite}`).join("\n"),
+  );
+  /* Each line-keyed entry is one where the quoted text recurs in its file, so
+     content anchoring could not tell the occurrences apart. */
+  for (const entry of byLine) {
+    assert.ok(entry.claim, `${entry.cite} is line-keyed with no claim saying why`);
   }
 });
 

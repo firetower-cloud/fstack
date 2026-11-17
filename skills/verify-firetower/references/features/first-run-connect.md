@@ -57,7 +57,7 @@ never carries a value — and the `/bootstrap` readback beside it.
   driving it is what settled the question; it is one of the six in `INHERITED`
   that reading got wrong. The word `Connect` is alive elsewhere in the app —
   connecting a git host, connecting a tracker, connecting an account, and
-  `desktop/scripts/states.mjs:484` presses the git-hosts one correctly — so a
+  `desktop/scripts/states.mjs:500` presses the git-hosts one correctly — so a
   global substitution is its own bug. Match this one on the address screen
   only.
 - **Before the setup wizard has run, there is no organisation to show.** The
