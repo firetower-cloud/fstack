@@ -41,11 +41,139 @@
  * port its own evidence names, so a screenshot would be of one Firetower and
  * the lock would describe another.
  */
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync } from "node:fs";
 import path from "node:path";
 import net from "node:net";
 
-export const PHASE = { claimed: "claimed", pinned: "pinned" };
+/**
+ * The three states a run can be in, and the only transitions between them.
+ *
+ * Written out because leaving it implicit deadlocked the lifecycle: `down`
+ * stopped the server but left its `serverId` in the lock, so the next `up`
+ * re-checked a recorded id against a silent port, read that as *not mine* and
+ * refused — forever. A run on one host was single-use, and the refusal's own
+ * advice was the command that had just refused.
+ *
+ *   nothing                 no lock, or a lock in `stopped`. Nothing is
+ *                           recorded, so nothing is owned and `up` may bind
+ *     -- up -->  claimed    this run bound a silent port and its child is
+ *                           alive; /bootstrap has no serverId until setup
+ *                           finishes, so ownership rests on that positive
+ *                           fact and only `up` may act in this phase
+ *     -- up -->  pinned     /bootstrap answered with a serverId and the lock
+ *                           records it. Every command may act
+ *     -- down -->  stopped  the server has been stopped and the serverId and
+ *                           address are CLEARED. Back to "nothing recorded",
+ *                           which is a legitimate state to start again from
+ *
+ * `reset` goes pinned -> claimed -> pinned without passing through stopped,
+ * because it keeps the stack and replaces the data.
+ */
+export const PHASE = { claimed: "claimed", pinned: "pinned", stopped: "stopped" };
+
+/**
+ * The complete run lock schema.
+ *
+ * Validated field by field on every read, and unknown fields are rejected.
+ * The reason is not tidiness: a lock is **executable authority** — `down`
+ * signals the pid it names and tears down the Compose project it names — and
+ * the previous version checked only that the file was JSON, was an object,
+ * and carried the right key. A lock with `serverPid: -1` passed that check,
+ * and `process.kill(-1, "SIGTERM")` signals every process the user can
+ * signal, which on this host is every session on it including the control
+ * plane hosting the session doing the signalling.
+ *
+ * So: "it parsed" is not "it is safe to act on". Each field below says what
+ * shape it must be, and anything else makes the whole lock unreadable — which
+ * is already a refusal everywhere.
+ */
+const SCHEMA = {
+  key: "string",
+  startedAt: "string?",
+  updatedAt: "string?",
+  stoppedAt: "string?",
+  phase: ["claimed", "pinned", "stopped"],
+  checkout: "string?",
+  server: "url?",
+  ports: "ports?",
+  project: "string?",
+  home: "string?",
+  session: "string?",
+  serverId: "string?",
+  serverPid: "pid?",
+  serverCommand: "string?",
+  serverStartedAt: "string?",
+  rendererPid: "pid?",
+  rendererCommand: "string?",
+  token: "string?",
+  user: "string?",
+  adminPassword: "string?",
+  organization: "string?",
+  evidence: "array?",
+  posted: "array?",
+  attachments: "array?",
+  verified: "object?",
+};
+
+/** A pid this CLI is willing to hold: a positive integer, and nothing else. */
+export function validPid(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+function checkField(name, rule, value) {
+  if (Array.isArray(rule)) {
+    return rule.includes(value) ? null : `${name} is "${value}", and the only phases are ${rule.join(", ")}`;
+  }
+  const optional = rule.endsWith("?");
+  const kind = optional ? rule.slice(0, -1) : rule;
+  if (value === undefined || value === null) {
+    return optional ? null : `${name} is missing`;
+  }
+  switch (kind) {
+    case "string":
+      return typeof value === "string" ? null : `${name} is ${typeof value}, not a string`;
+    case "url":
+      return typeof value === "string" && /^https?:\/\/[^\s/]+$/.test(value)
+        ? null
+        : `${name} is not an http(s) origin: ${JSON.stringify(value)}`;
+    case "pid":
+      /* The field that made a hostile lock executable. */
+      return validPid(value) ? null : `${name} is ${JSON.stringify(value)}, and a pid must be a positive integer`;
+    case "ports": {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return `${name} is not an object`;
+      for (const kindOf of ["control", "postgres", "renderer"]) {
+        const port = value[kindOf];
+        if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+          return `${name}.${kindOf} is ${JSON.stringify(port)}, not a port number`;
+        }
+      }
+      return null;
+    }
+    case "array":
+      return Array.isArray(value) ? null : `${name} is not an array`;
+    case "object":
+      return value && typeof value === "object" && !Array.isArray(value) ? null : `${name} is not an object`;
+    default:
+      return null;
+  }
+}
+
+/** Every way a lock can fail to be a lock, as a list. */
+export function validateLock(run, key) {
+  if (!run || typeof run !== "object" || Array.isArray(run)) return ["the lock is not a JSON object"];
+  const wrong = [];
+  if (run.key !== key) wrong.push(`the lock is for isolation key ${JSON.stringify(run.key)}, and this run is ${key}`);
+  for (const [name, rule] of Object.entries(SCHEMA)) {
+    if (name === "key") continue;
+    const problem = checkField(name, rule, run[name]);
+    if (problem) wrong.push(problem);
+  }
+  for (const name of Object.keys(run)) {
+    if (!(name in SCHEMA)) wrong.push(`${name} is not a field of a run lock`);
+  }
+  return wrong;
+}
 
 /** Read the run lock. An unreadable lock is a refusal, not an empty one. */
 export function readLock(plan) {
@@ -56,15 +184,32 @@ export function readLock(plan) {
   } catch (error) {
     return { state: "unreadable", run: null, why: `${plan.lock}: ${error.code ?? error.message}` };
   }
+  let run;
   try {
-    const run = JSON.parse(text);
-    if (!run || typeof run !== "object" || run.key !== plan.key) {
-      return { state: "unreadable", run: null, why: "the lock is for a different isolation key" };
-    }
-    return { state: "ok", run };
+    run = JSON.parse(text);
   } catch {
     return { state: "unreadable", run: null, why: `${plan.lock} is not JSON` };
   }
+  const wrong = validateLock(run, plan.key);
+  if (wrong.length) {
+    return {
+      state: "unreadable",
+      run: null,
+      why: wrong.length === 1 ? wrong[0] : `${wrong.length} problems: ${wrong.join("; ")}`,
+    };
+  }
+  return { state: "ok", run };
+}
+
+/**
+ * This run's administrator password, which lives only here.
+ *
+ * No command may derive it — see `newPassword` in key.mjs for why — so a
+ * command that cannot read it from the lock has to refuse rather than guess.
+ */
+export function password(plan) {
+  const { run } = readLock(plan);
+  return run?.adminPassword ?? null;
 }
 
 export function writeLock(plan, run) {
@@ -121,8 +266,13 @@ function connects(port, host, timeout) {
  */
 export async function probe(url, timeout = 3000) {
   const signal = AbortSignal.timeout(timeout);
+  let response;
   try {
-    const response = await fetch(`${url}/api/v1/bootstrap`, { signal });
+    response = await fetch(`${url}/api/v1/bootstrap`, { signal });
+  } catch (error) {
+    return { reachable: false, readable: false, why: error.name === "TimeoutError" ? "timed out" : (error.cause?.code ?? error.message) };
+  }
+  try {
     if (!response.ok) return { reachable: true, readable: false, why: `HTTP ${response.status}` };
     const body = await response.json();
     return {
@@ -134,7 +284,16 @@ export async function probe(url, timeout = 3000) {
       authModes: body.authModes ?? [],
     };
   } catch (error) {
-    return { reachable: false, readable: false, why: error.name === "TimeoutError" ? "timed out" : (error.cause?.code ?? error.message) };
+    /* Something answered on the port and it was not a Firetower bootstrap
+       document. That is "I cannot tell which Firetower this is", not "nothing
+       is there" — and reporting it as unreachable was why a live foreign HTTP
+       server classified as `probe-failed`, leaving `serverid-unreadable`
+       documented but unreachable from the CLI. */
+    return {
+      reachable: true,
+      readable: false,
+      why: `answered ${response.status} with a body that is not a Firetower bootstrap document (${error.message})`,
+    };
   }
 }
 
@@ -205,13 +364,81 @@ export async function verdict(plan, { url, lock } = {}) {
   return { at, verdict: "mine", cause: null, answer, reasons: [`serverId ${recorded} answered on ${at}`], recorded };
 }
 
-/** Is this pid still there? Signal 0, so nothing is sent. */
+/**
+ * Is this pid still there? Signal 0, so nothing is sent.
+ *
+ * A non-positive pid is not a pid. `-1` used to pass this check — it is
+ * truthy and `process.kill(-1, 0)` succeeds, because it is the "every
+ * process you may signal" group — which is how a lock holding `serverPid: -1`
+ * became a host-wide SIGTERM. Liveness is also not identity: see `identify`.
+ */
 export function alive(pid) {
-  if (!pid) return false;
+  if (!validPid(pid)) return false;
   try {
     process.kill(pid, 0);
     return true;
   } catch (error) {
     return error.code === "EPERM";
   }
+}
+
+/**
+ * What is actually running as this pid.
+ *
+ * `ps -o lstart=,command= -p <pid>`, read rather than trusted: a pid in a
+ * lock is a number somebody wrote down, and pids are recycled. QA's dry-run
+ * printed `kill 98102` from a stale lock, and 98102 is this host's own
+ * control plane.
+ *
+ * Reading is safe and signalling is not, so this is always asked first.
+ */
+export function identify(pid) {
+  if (!validPid(pid)) return { pid, found: false, why: `${JSON.stringify(pid)} is not a positive integer, so it is not a pid` };
+  let line;
+  try {
+    /* -ww, or macOS truncates the command line and the comparison below
+       would be made against a prefix. */
+    line = execFileSync("ps", ["-ww", "-o", "lstart=,command=", "-p", String(pid)], { encoding: "utf8" }).trim();
+  } catch {
+    return { pid, found: false, why: `no process ${pid}` };
+  }
+  if (!line) return { pid, found: false, why: `no process ${pid}` };
+  /* `lstart` is a fixed-width 24-character date — "Mon Nov 17 17:49:03 2026". */
+  const match = line.match(/^(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+(.*)$/);
+  return match
+    ? { pid, found: true, startedAt: match[1], command: match[2] }
+    : { pid, found: true, startedAt: null, command: line };
+}
+
+/**
+ * May this run signal this pid? Identity, not liveness.
+ *
+ * The lock records the command line `up` launched, and this asks the
+ * operating system what that pid is running now. They have to agree. A
+ * recycled pid, a hand-edited lock and a pid belonging to another session all
+ * fail here, and the refusal names what it found instead — which is the
+ * difference between "stale lock, nothing to do" and "I was about to SIGTERM
+ * your control plane".
+ */
+export function mayStop(pid, expected) {
+  if (!validPid(pid)) {
+    return { ok: false, why: `${JSON.stringify(pid)} is not a pid. A positive integer is the only thing this will signal`, found: null };
+  }
+  const found = identify(pid);
+  if (!found.found) return { ok: false, gone: true, why: found.why, found };
+  if (!expected) {
+    return {
+      ok: false,
+      why: `pid ${pid} is running "${found.command}", and this run recorded no command line for it, so there is nothing to compare`,
+      found,
+    };
+  }
+  if (found.command !== expected) {
+    return {
+      ok: false,
+      why: `pid ${pid} is running "${found.command}", and this run recorded "${expected}" — a recycled or foreign pid, not this run's`,
+      found,
+    };
+  }
+  return { ok: true, why: `pid ${pid} is running exactly the command line this run launched`, found };
 }

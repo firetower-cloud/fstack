@@ -28,6 +28,7 @@
  * any of those three, which is checked by a test rather than hoped for.
  */
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -129,10 +130,31 @@ export const databaseUrl = (p, db = "firetower") =>
 export const serverUrl = (p) => `http://127.0.0.1:${p.control.value}`;
 
 /**
- * The administrator password for this run.
+ * The administrator password for this run: independent, random, per run.
  *
- * Deterministic from the key, so a later command in the same run can sign in
- * without having been handed anything, and two runs never share one. It is
- * written into the run lock under the scratch root, which is 0700.
+ * **It used to be `verify-${hash(`pw:${key}`)}-ok`** — a 32-bit FNV of the
+ * isolation key, and `evidence post` published that key beside the control
+ * plane's port in a public pull request comment. Anyone who could reach the
+ * loopback address could therefore compute a live administrator credential
+ * from the comment: another session on this host, another user, anyone with a
+ * forward. Resetting with the same key reproduced the same password.
+ *
+ * Two rules come out of that, and they are both structural rather than a
+ * tightening of the old scheme:
+ *
+ *   - **Nothing published may share an input with anything secret.** The key
+ *     names ports, a Compose project and a scratch directory, all of which
+ *     appear in output a human reads. So no credential may be derived from
+ *     it, however the derivation is dressed up. 24 bytes from
+ *     `crypto.randomBytes` has no input to share.
+ *   - **The password is state, not a function.** It is generated once by
+ *     `up`, kept only in the run lock (0600 beneath a 0700 directory), read
+ *     from there by every later command, and replaced on `reset`. A command
+ *     that cannot read it refuses instead of deriving it, because deriving it
+ *     is the bug.
+ *
+ * base64url, so it survives JSON, a shell and an HTML form unescaped;
+ * `crates/ft-server/src/accounts.rs:47` wants at least 5 characters and this
+ * is 32.
  */
-export const adminPassword = (key) => `verify-${hash(`pw:${key}`).toString(36)}-ok`;
+export const newPassword = () => `verify-${randomBytes(24).toString("base64url")}`;

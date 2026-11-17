@@ -10,7 +10,10 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { port, plan, hash, adminPassword, FORBIDDEN_PORTS, isolationKey } from "../lib/key.mjs";
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { port, plan, hash, newPassword, FORBIDDEN_PORTS, isolationKey } from "../lib/key.mjs";
 
 const KEYS = Array.from({ length: 5000 }, (_, i) => `s_${hash(`k${i}`).toString(36)}${i}`);
 
@@ -79,11 +82,38 @@ test("$FIRETOWER_SESSION is the key when it is set, and provenance says so", () 
   }
 });
 
-test("the run's administrator password clears the server's minimum", () => {
+test("the administrator password is random per run, not derived from anything published", () => {
+  /* The bug this replaces: `verify-${hash(`pw:${key}`)}-ok`, a 32-bit FNV of
+     the isolation key — and `evidence post` published that key beside the
+     control plane's port in a public comment, so a reader who could reach
+     loopback could compute a live credential. The property is not "harder to
+     guess": it is that the password shares no input with anything printed. */
+  const made = Array.from({ length: 500 }, () => newPassword());
+  assert.equal(new Set(made).size, 500, "500 passwords, 500 distinct values");
+
   /* crates/ft-server/src/accounts.rs:47 — MINIMUM_PASSWORD = 5 */
-  for (const key of KEYS.slice(0, 200)) {
-    assert.ok(adminPassword(key).length >= 12);
+  for (const one of made) assert.ok(one.length >= 12, one);
+  /* base64url, so it survives JSON, a shell and an HTML form unescaped. */
+  for (const one of made) assert.match(one, /^verify-[A-Za-z0-9_-]{32}$/);
+
+  /* And it takes no argument, so there is no key, port, project or path it
+     could be derived from. */
+  assert.equal(newPassword.length, 0);
+});
+
+test("no key, port or project name is an input to any credential", () => {
+  /* Enforced over the whole bundle rather than one function: the rule is
+     "nothing published may share an input with anything secret", and the way
+     that rule was broken was one call to a hash of the key. */
+  const here = path.dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
+  for (const file of readdirSync(path.join(here, "lib"))) {
+    const text = readFileSync(path.join(here, "lib", file), "utf8");
+    const code = text.split("\n").filter((line) => !/^\s*(\*|\/\*|\/\/)/.test(line)).join("\n");
+    assert.ok(!/hash\(`?pw/.test(code), `${file} derives a credential from a hash`);
+    assert.ok(!/adminPassword\s*=\s*\(/.test(code), `${file} still has a password function of the key`);
   }
-  assert.notEqual(adminPassword("a"), adminPassword("b"));
-  assert.equal(adminPassword("a"), adminPassword("a"));
+  /* The password is read from the lock, by one function, in one file. */
+  const own = readFileSync(path.join(here, "lib/own.mjs"), "utf8");
+  assert.match(own, /export function password\(plan\)/);
+  assert.match(own, /run\?\.adminPassword \?\? null/);
 });

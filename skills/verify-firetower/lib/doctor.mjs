@@ -15,7 +15,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { serverUrl, databaseUrl, FORBIDDEN_PORTS } from "./key.mjs";
-import { readLock, verdict, listening, alive } from "./own.mjs";
+import { readLock, verdict, listening, alive, identify } from "./own.mjs";
+import { serverCommand } from "./stack.mjs";
 import { raw, refuse } from "./api.mjs";
 import { EXIT, emit, fail, say, table, dim, tick, cross, warn } from "./out.mjs";
 
@@ -28,6 +29,15 @@ export async function doctor(plan, flags) {
   const held = readLock(plan);
   const target = flags.server ? normalise(flags.server) : serverUrl(plan);
   const asked = Boolean(flags.server);
+  /* **One operation, one target.** `--server` used to verify the address it
+     was given and then, if the verdict came back "mine", send this run's
+     bearer token to `serverUrl(plan)` — a different address — for /setup and
+     /hosts. So an ownership check could pass about one endpoint while the
+     credential went to another, and the second address could be :4400.
+     Checking an address this run did not derive is read-only by construction:
+     /bootstrap is unauthenticated, and nothing authenticated happens unless
+     the asked-about address IS this run's own. */
+  const foreign = asked && target !== serverUrl(plan);
   const seen = await verdict(plan, { url: target, lock: held });
 
   add("key", plan.key ? "ok" : "no", plan.key ? `${plan.key} (${plan.keySource})` : "no isolation key could be derived");
@@ -57,11 +67,25 @@ export async function doctor(plan, flags) {
   );
 
   if (held.state === "ok") {
-    const pids = [["server", held.run.serverPid], ["renderer", held.run.rendererPid]].filter(([, p]) => p);
-    for (const [what, pid] of pids) {
-      add(`pid ${what}`, alive(pid) ? "ok" : "no", `${pid} ${alive(pid) ? "alive" : "gone"}`);
+    const pids = [["server", held.run.serverPid, serverCommand(plan)], ["renderer", held.run.rendererPid, held.run.rendererCommand]].filter(([, p]) => p);
+    for (const [what, pid, expected] of pids) {
+      /* Liveness and identity are different questions and this reports both,
+         because a lock naming a live pid that is somebody else's process is
+         the state that printed `kill 98102` — the host's control plane —
+         from a dry run. */
+      const running = identify(pid);
+      const mine = running.found && expected && running.command === expected;
+      add(
+        `pid ${what}`,
+        !running.found ? "no" : mine ? "ok" : "no",
+        !running.found
+          ? `${pid} gone`
+          : mine
+            ? `${pid} alive, running exactly what this run launched ${dim(`since ${running.startedAt ?? "?"}`)}`
+            : `${pid} is alive but running "${running.command}" — NOT this run's. Nothing will be signalled`,
+      );
     }
-    if (!pids.length) add("pid", "unknown", "no pids recorded");
+    if (!pids.length) add("pid", "unknown", `no pids recorded ${dim(`phase ${held.run.phase}`)}`);
   }
 
   add(
@@ -73,7 +97,15 @@ export async function doctor(plan, flags) {
   /* The database, the forced password change and the setup wizard are only
      askable once ownership is positive. Asking them of somebody else's
      instance is the mistake this file exists to prevent. */
-  if (seen.verdict === "mine") {
+  if (foreign) {
+    add(
+      "bound to",
+      "unknown",
+      `${target} was asked about with --server, and it is not this run's ${serverUrl(plan)}. Only unauthenticated GET /api/v1/bootstrap was sent, and no token was attached to anything`,
+    );
+  }
+
+  if (seen.verdict === "mine" && !foreign) {
     const db = await database(plan);
     add("database", db.ok ? "ok" : "no", db.detail);
 
@@ -156,6 +188,8 @@ export async function doctor(plan, flags) {
         verdict: seen.verdict,
         exit,
         asked: asked ? target : null,
+        boundTo: foreign ? null : serverUrl(plan),
+        authenticated: seen.verdict === "mine" && !foreign,
         plan: planJson(plan),
         instance: {
           at: seen.at,
@@ -191,6 +225,10 @@ export async function doctor(plan, flags) {
 
   if (seen.verdict === "mine") {
     say(`  ${tick()} ${seen.recorded} is this run's, positively: it is the serverId recorded at launch.`);
+    if (foreign) {
+      say(`  ${warn()} ${target} is not this run's derived address, so nothing authenticated was asked of it.`);
+      say(`      ${dim(`this run's own control plane is ${serverUrl(plan)}; drop --server to check that one`)}`);
+    }
     if (failed.length) {
       say(`  ${warn()} ${failed.length} check${failed.length === 1 ? "" : "s"} below a pass. Fix before driving:`);
       for (const f of failed) say(`      ${f.check}: ${f.detail}`);

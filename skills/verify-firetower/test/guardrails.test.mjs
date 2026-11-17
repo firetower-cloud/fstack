@@ -60,6 +60,26 @@ test("nothing in this bundle kills by process name", () => {
     }
   }
   assert.ok(read("lib/stack.mjs").includes("process.kill(pid"), "stopPid acts on a recorded pid");
+
+  /* And a signal is only ever reached through an identity check. `alive()`
+     answers "is something there"; `mayStop()` answers "is it mine", and only
+     the second one may authorise a signal. The previous guard was
+     `if (!pid || !alive(pid))`, which is neither: -1 is truthy and
+     process.kill(-1, 0) succeeds. */
+  const stack = read("lib/stack.mjs");
+  const body = stack.slice(stack.indexOf("async function stopPid("));
+  /* Every signal in the whole bundle is inside stopPid. The docstrings name
+     `process.kill(-1, "SIGTERM")` to say why it is refused, which is the
+     feature, so only code lines are counted. */
+  const code = (text) => text.split("\n").filter((line) => !/^\s*(\*|\/\*|\/\/)/.test(line)).join("\n");
+  assert.equal((code(stack).match(/process\.kill\(/g) ?? []).length, 2, "two signals in this file, both in stopPid");
+  assert.equal((code(body).match(/process\.kill\(pid, "SIG/g) ?? []).length, 2, "SIGTERM then SIGKILL");
+  /* ...and stopPid refuses before the first of them, on identity rather than
+     on liveness. The previous guard was `if (!pid || !alive(pid))`, which is
+     neither: -1 is truthy and process.kill(-1, 0) succeeds. */
+  const guard = body.indexOf("if (!checked.mayStop) return");
+  assert.ok(guard > 0, "stopPid asks checkStop first");
+  assert.ok(guard < body.indexOf('process.kill(pid, "SIG'), "and it refuses before it signals");
 });
 
 test("no docker compose invocation omits an explicit project, or adds --remove-orphans", () => {
@@ -99,6 +119,7 @@ test("down refuses while any capture is unposted, and touches nothing first", as
   try {
     writeLock(plan, {
       key: "k",
+      phase: "pinned",
       serverPid: null,
       evidence: [{ name: "a-proof", at: path.join(root, "a.png"), postedAt: null }],
     });
@@ -109,6 +130,7 @@ test("down refuses while any capture is unposted, and touches nothing first", as
        wall rather than an ordering. */
     writeLock(plan, {
       key: "k",
+      phase: "pinned",
       serverPid: null,
       evidence: [{ name: "a-proof", at: path.join(root, "a.png"), postedAt: "2026-11-17T00:00:00Z" }],
     });
