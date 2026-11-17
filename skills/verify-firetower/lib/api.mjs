@@ -91,7 +91,26 @@ export async function call(plan, method, route, { body } = {}) {
       }),
     };
   }
-  if (seen.verdict !== "mine") {
+  /**
+   * `claimed` is this run's, and `api` is how the gates are read.
+   *
+   * This used to accept `mine` only, which made `api` unusable on exactly the
+   * instance it is most needed on. A `--first-run` instance has no `serverId`
+   * — the organisation has not been named — so its verdict is `claimed`, and
+   * three files tell the reader to settle which gate they are on by asking
+   * `api GET /setup` rather than by reading the screen. The refusal even
+   * printed the positive ownership fact as its reason: *ownership rests on
+   * the port having been silent when pid N bound it*. Having established
+   * that, refusing was not caution, it was a contradiction.
+   *
+   * Nothing is loosened: `claimed` is a positive assertion of ownership
+   * (this run bound a silent port and its own child is still alive), it is
+   * the same verdict `drive` has always acted on, and the two routes this
+   * unlocks are the ones the server itself keeps reachable behind the gate —
+   * `/bootstrap` is unauthenticated and `/api/v1/setup` is on
+   * `permitted_while_locked`.
+   */
+  if (seen.verdict !== "mine" && seen.verdict !== "claimed") {
     return { exit: refuse(seen) };
   }
 
@@ -122,17 +141,34 @@ export async function call(plan, method, route, { body } = {}) {
   }
 
   if (result.status === 403 && result.body?.code === "PasswordChangeRequired") {
+    /* On a `--first-run` instance the gate is standing on purpose, so telling
+       the operator to clear it is telling them to destroy what they came to
+       test. The two routes that stay readable behind it are named instead. */
+    const deliberate = Boolean(held.firstRun);
     return {
       exit: fail(EXIT.precondition, {
-        problem: "every authenticated route is answering 403 until the forced password change is cleared",
+        problem: deliberate
+          ? `${route} is behind the forced password change, which this instance is holding open on purpose`
+          : "every authenticated route is answering 403 until the forced password change is cleared",
         because: [
           "the first administrator carries must_change_password, and a token alone is not a usable session",
           `${method} ${result.url} -> 403 PasswordChangeRequired`,
+          ...(deliberate ? ["this run was brought up with --first-run, so both gates are standing by design"] : []),
         ],
-        instead: [
-          "control-firetower up            step 4 runs `firetower passwd admin`, which clears the flag in the same statement",
-          "control-firetower doctor        confirms it afterwards",
-        ],
+        instead: deliberate
+          ? [
+              "control-firetower api GET /setup       readable behind the gate: which of the gates is still up",
+              "control-firetower api GET /bootstrap   readable behind the gate: unauthenticated",
+              "",
+              "Everything else needs the gate cleared, which is what the",
+              "replace-the-temporary-password journey does:",
+              "control-firetower drive act replace-the-temporary-password",
+            ]
+          : [
+              "control-firetower up            step 4 runs `firetower passwd admin`, which clears the flag in the same statement",
+              "control-firetower doctor        confirms it afterwards",
+            ],
+        detail: { cause: "password-gate", firstRun: deliberate },
       }),
     };
   }

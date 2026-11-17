@@ -18,7 +18,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { checkTouched } from "../lib/limits.mjs";
@@ -224,4 +224,23 @@ test("a module chosen at runtime is an unestablished graph, so outside", () => {
   } finally {
     remove();
   }
+});
+
+/**
+ * `--touched a,b,c` is three paths.
+ *
+ * It was read as a single filename: a path that does not exist, which reads
+ * as OUTSIDE under the closed default. So the one command whose job is to
+ * refuse carefully gave the right verdict for the wrong reason, and would
+ * have kept doing so if one of the three had been native. Repeating the flag
+ * was the working form and neither spelling was documented.
+ */
+test("--touched splits a comma list into the paths it names", () => {
+  const cli = readFileSync(new URL("../control-firetower", import.meta.url), "utf8");
+  const block = cli.slice(cli.indexOf("async function limits("), cli.indexOf("function wrap("));
+  assert.match(block, /\.split\(","\)/, "the comma form is split rather than taken as a filename");
+  assert.match(block, /\.flatMap\(/, "and it is flattened back into one list with the repeated form");
+  /* And it is documented, which it was not in either spelling. */
+  const help = readFileSync(new URL("../lib/help.mjs", import.meta.url), "utf8");
+  assert.match(help, /repeatable OR comma-separated/);
 });

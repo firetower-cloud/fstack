@@ -61,6 +61,15 @@ Six steps, not four, and the two everybody misses are 4 and 6:
 
 Then `/bootstrap` finally has a `serverId`, and `up` records it.
 
+**`up --first-run` stops after three of them on purpose.** Steps 4 and 6 are
+what clear the two first-run gates, so an instance that has had them cannot
+show the screens the first-run journeys are about. `--first-run` builds,
+starts Postgres, serves, seeds the administrator through
+`ADMIN_INITIAL_PASSWORD` — which leaves `must_change_password` set, because a
+password that came out of a file cannot quietly become the permanent one —
+takes one token, and stops. `reset --first-run` does the same from a run that
+is already up, in about 3s.
+
 **The first `up` takes about 71 seconds and prints nothing for 64 of them.**
 Those 64 seconds are `cargo build -p ft-cli`, which produces no output at all
 while it runs. It is the build, not a hang.
@@ -80,12 +89,38 @@ Postgres port, the renderer port, the Compose project, `FIRETOWER_HOME` and
 the scratch root all come from it. No derivation can produce 4400, 5433 or
 5273, and that is enforced by a test rather than by intention.
 
+**The derivation does not know what else is on the host, and a collision is
+normal rather than a fault.** It hashes one key into three bands; it does not
+consult the host's port allocator, and on a machine with dozens of live
+sessions a derived port will sometimes already be taken — measured on
+2026-11-17, when the derived Postgres port came out as one another session's
+container had published. `doctor` says `answering` for a port nothing of this
+run started, which is the signal. The answer is not to let anything slide to
+the next free port — that relocates a run away from the port its own evidence
+names — but to say which ports to use:
+
+```sh
+FT_VERIFY_CONTROL_PORT=4505 FT_VERIFY_POSTGRES_PORT=5525 FT_VERIFY_RENDERER_PORT=5355 \
+  ./control-firetower up
+```
+
+`doctor` then prints `($FT_VERIFY_CONTROL_PORT)` instead of
+`(derived from the key)`, so the provenance of every port stays visible.
+Inside a Firetower session, the ports the host allocated to the session are
+the right ones to give it.
+
 The renderer is the one thing `up` does not start, because its port is a flag
 only:
 
 ```sh
+cd <checkout>/desktop && pnpm install                                  # once per checkout
 cd <checkout>/desktop && pnpm exec vite --port <renderer port> --strictPort
 ```
+
+**`pnpm install` in `<checkout>/desktop` is a precondition and it is easy to
+miss**, because it is a different dependency tree from the `npm install`
+beside this file. A fresh checkout has no `desktop/node_modules` and
+`pnpm exec vite` fails outright.
 
 `pnpm dev -- --port N` does **not** work: pnpm swallows the argument and Vite
 binds its hardcoded 5273, which is a port another session may own.
@@ -117,6 +152,7 @@ So all of these are refusals, exit 2, with the cause in `--json` as
 | something answered and will not say which Firetower it is | `serverid-unreadable` |
 | nothing is recorded for what is being asked about — including `down` with no run lock | `nothing-recorded` |
 | the recorded server stopped answering | `probe-failed` |
+| an ssh address given to `drive` is not a container this run started | `endpoint-not-mine` |
 
 **The rule applies to destroying as well as to reading, and that is the half
 that cannot be undone.** `down` with no run lock used to derive the Compose
@@ -159,7 +195,14 @@ already in the repository, one line long.
 ./control-firetower drive audit                          # re-drive every handle against the app
 ./control-firetower drive open tasks --as tasks --feature tasks
 ./control-firetower drive act add-a-machine --as probing
+./control-firetower drive act replace-the-temporary-password   # a first-run journey
 ```
+
+**The feature map is in `references/features/`** — one file per feature, each
+one a recipe with the preconditions it needs, the commands that drive it and
+the observable result of each. Its `README.md` carries the baseline every
+recipe starts from and the order a full regression sweep walks them. Read the
+file for the journey you are testing before you drive anything.
 
 `playwright-core` against Chrome, against the desktop's own Vite renderer,
 against this run's `ft-server`. Signing in by typing the address into the
@@ -169,36 +212,53 @@ layout and never a value — the page's console output, and the command that
 produced the state.
 
 **The selectors are copies, and the copies were verified rather than
-trusted.** `lib/vocabulary.mjs` holds them, each with the file and line it
-came from in `desktop/scripts/states.mjs` or `desktop/e2e/cursor-live.mjs`.
+trusted.** `lib/vocabulary.mjs` holds them, each with the source it came from.
 That attribution is the price of a bundle that can be lifted into another
-repository — and it turned out to be worth more than expected, because **the
-two harnesses in the checkout disagree with each other**:
+repository — and the measurement that makes it worth paying is this:
 
-- `desktop/scripts/states.mjs:484,492` drives `/^Connect$/`, against the mock
-  server.
-- `desktop/e2e/cursor-live.mjs` is stale against a real one — its sign-in
-  clicks `Connect` where the app now renders `Continue`
-  (`desktop/src/ui/Connect.tsx:224`), so it could not have run anywhere.
+**The first version of this vocabulary was 28 handles assembled by reading the
+repository. When they were driven, 6 of the 28 were wrong.**
 
-Neither had been checked against the running application recently. So "copy
-the vocabulary" cannot mean "trust it". **Every handle in this bundle was
-driven against a real build before it shipped**, on 2026-11-17 against
+A button read as `Connect` that the app renders as `Continue`
+(`desktop/src/ui/Connect.tsx:224`); two gestures describing a dialog this
+build does not have; `/configuration/roles`, which renders Agent profiles
+rather than Roles; bare `/configuration`, which is not a screen of its own and
+falls through to Repositories; and the screen whose heading is
+`This Firetower` and not `Server`. Each of the six carries what driving found
+instead, in `INHERITED` in that file. None of them were stale by a release —
+they were wrong about the build that was running when they were read.
+
+So "copy the vocabulary" cannot mean "trust it". **Every handle in this bundle
+was driven against a real build before it shipped**, on 2026-11-17 against
 `0.55.0`, and that is what `drive audit` re-asks:
 
 ```sh
 ./control-firetower drive audit     # exit 6 if any shipped handle no longer matches
 ```
 
-Three entries copied from the harnesses were wrong and are gone or corrected,
-with the reason recorded beside each: `add-a-repository` describes an `Add`
-button that an empty repositories screen does not have; `name-a-workspace`
-expects `New workspace` to open a dialog, when the button is named
-`New workspace ⌘N` and opens nothing because the composer on the home *is*
-the new workspace; and `/configuration/roles` renders Agent profiles rather
-than Roles, so it is recorded as a route that is not the screen its name
-suggests instead of being quietly aliased. `states.mjs:11-13` has the
-doctrine and it is right: a state this build cannot reach is the finding.
+The two entries that were wrong about a whole screen are recorded rather than
+quietly aliased — `/configuration/roles` is entered under the heading it
+actually renders, with the divergence kept in `NOT_WHAT_THEY_SAY`.
+`desktop/scripts/states.mjs:11-13` has the doctrine and it is right: a state
+this build cannot reach is the finding.
+
+**And the citations are audited too, which they were not.** `drive audit`
+re-drives the handles; nothing re-read the hundred-odd `file:line` references
+that are the evidence for them. One of those references went false — the
+justification for the rule above used to be a sentence about what a harness in
+the firetower checkout was doing, and that sentence was fixed upstream five
+hours before this bundle was committed, so `drive audit` printed something
+untrue on every run for as long as it stood. `lib/citations.mjs` is the ledger
+of every citation and what its line has to contain:
+
+```sh
+node --test test/citations.test.mjs   # re-reads all of them in the checkout
+```
+
+It fails on a citation whose line no longer says what is claimed, on a
+citation written in the prose and not registered, and on a bare `:NNN` with no
+file in front of it. Run it after any change to this bundle's prose, and after
+any upstream change the bundle cites.
 
 When a handle stops matching, `drive` reports it as a finding and names the
 origin to diff. It does not crash, and it does not guess.
@@ -371,8 +431,8 @@ A path is now inside only where that can be positively established:
 4. Only a fully-read, native-free reachable set is inside.
 
 **Reachability is a property of the import graph, not of a filename**, and
-`ui/Titlebar.tsx` is the proof: nothing in its name says native, and its line
-29 is `import { drag } from "~/drag"`. So `--touched` needs the checkout —
+`ui/Titlebar.tsx` is the proof: nothing in its name says native, and
+`desktop/src/ui/Titlebar.tsx:29` is `import { drag } from "~/drag"`. So `--touched` needs the checkout —
 with no graph to read, every path under `desktop/src/` reads as outside, which
 is the safe direction rather than a convenience.
 
@@ -451,13 +511,22 @@ real stack after any UI change, and it exits 6 naming every handle that no
 longer matches and where that handle was copied from.
 
 The procedure when one fails is: update the handle **and** its origin comment
-together. A copy whose origin is stale is worse than no copy — and the two
-harnesses already in the firetower checkout are what that looks like after
-nobody runs them for a while.
+together. A copy whose origin is stale is worse than no copy, because the
+origin is what the next reader checks instead of the application — and
+`test/citations.test.mjs` is what makes that second half fail loudly rather
+than quietly.
 
-Two handles cannot be re-checked by `audit` and are marked rather than
-assumed: the forced password change and the setup wizard, which every
-prepared run has already cleared. They were verified once by standing up a
-deliberately unprepared instance — fresh database, `ft-server --dev`, neither
-step 4 nor step 6 — and the procedure is written into `lib/vocabulary.mjs`
-beside them.
+**Which half of the vocabulary `audit` can re-check depends on the instance
+it is given, and it says which.** From a prepared run it drives the app's own
+states and gestures, and reports the two first-run gates as not re-checkable
+from there — they have been cleared by the steps that prepared it. From an
+instance brought up with `--first-run` it drives the first-run journeys,
+which open both gates on the way through, and then the app's states behind
+them: one pass over everything.
+
+Some entries describe an install in a particular state — an empty fleet, a
+bare repositories screen, a machine that has not been added yet. Those say
+what they need, `audit` asks the control plane before driving them, and
+reports them as not performed with the reason rather than failing them. The
+feature map's sweep order is the other half of that fact: the entries about
+an empty install are walked before the ones that fill it.

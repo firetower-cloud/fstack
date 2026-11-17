@@ -13,6 +13,8 @@
  * lines that delete 54GB of other people's work.
  */
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { promisify } from "node:util";
 import { serverUrl, databaseUrl, FORBIDDEN_PORTS } from "./key.mjs";
 import { readLock, verdict, listening, alive, identify } from "./own.mjs";
@@ -88,10 +90,16 @@ export async function doctor(plan, flags) {
     if (!pids.length) add("pid", "unknown", `no pids recorded ${dim(`phase ${held.run.phase}`)}`);
   }
 
+  /* `claimed` on a deliberately-unprepared instance is a pass, not a failure:
+     there is no serverId to check against because the organisation has not
+     been named, which is the state `--first-run` exists to produce. A plain
+     `up` that stopped short of step 6 is the other `claimed`, and that one is
+     still a `no`. */
+  const claimedOnPurpose = seen.verdict === "claimed" && Boolean(held.run?.firstRun);
   add(
     "instance",
-    seen.verdict === "mine" ? "ok" : seen.verdict === "nothing-here" ? "unknown" : "no",
-    instanceLine(seen),
+    seen.verdict === "mine" || claimedOnPurpose ? "ok" : seen.verdict === "nothing-here" ? "unknown" : "no",
+    instanceLine(seen, held),
   );
 
   /* The database, the forced password change and the setup wizard are only
@@ -144,12 +152,19 @@ export async function doctor(plan, flags) {
   }
 
   const renderer = await listening(plan.renderer.value);
+  /* `pnpm install` in the checkout's desktop/ is a precondition of the
+     renderer and a different dependency tree from this skill's own. A fresh
+     checkout has none, and the first sign of it used to be `pnpm exec vite`
+     failing with the operator's attention somewhere else entirely. */
+  const deps = plan.checkout ? existsSync(path.join(plan.checkout, "desktop", "node_modules")) : false;
   add(
     "renderer",
     renderer ? "ok" : "unknown",
     renderer
       ? `answering on http://localhost:${plan.renderer.value}`
-      : `not started. cd desktop && pnpm exec vite --port ${plan.renderer.value} --strictPort ${dim("(flag only: vite.config.ts:15 hardcodes 5273. `pnpm dev -- --port` swallows it)")}`,
+      : !deps
+        ? `not started, and ${path.join(plan.checkout ?? "<checkout>", "desktop", "node_modules")} is not there: run \`pnpm install\` in ${path.join(plan.checkout ?? "<checkout>", "desktop")} first, then \`pnpm exec vite --port ${plan.renderer.value} --strictPort\``
+        : `not started. cd desktop && pnpm exec vite --port ${plan.renderer.value} --strictPort ${dim("(flag only: vite.config.ts:15 hardcodes 5273. `pnpm dev -- --port` swallows it)")}`,
   );
 
   const captures = held.run?.evidence ?? [];
@@ -183,10 +198,31 @@ export async function doctor(plan, flags) {
 
   if (flags.json) {
     const exit = exitFor(seen, held);
+    /**
+     * `error.cause` on every exit-2 path, which `--help` and `SKILL.md` both
+     * promise and this one did not keep.
+     *
+     * `doctor --json` carried `error: null` on a refusal and put the cause at
+     * `instance.cause`, so a caller branching the documented way — exit 2,
+     * read `error.cause` — got nothing from the one command whose whole job
+     * is to answer that question. `down` and `drive` carry it; now so does
+     * this. `instance.cause` stays where it is: it was never wrong, only
+     * alone.
+     */
+    const error =
+      exit === EXIT.notMine
+        ? {
+            problem: `the Firetower answering on ${seen.at} is not this run's`,
+            because: seen.reasons,
+            instead: ["control-firetower doctor", `lsof -nP -iTCP:${seen.at.split(":").pop()} -sTCP:LISTEN`],
+            cause: seen.cause ?? null,
+          }
+        : null;
     return emit(
       {
         verdict: seen.verdict,
         exit,
+        error,
         asked: asked ? target : null,
         boundTo: foreign ? null : serverUrl(plan),
         authenticated: seen.verdict === "mine" && !foreign,
@@ -238,11 +274,20 @@ export async function doctor(plan, flags) {
   }
 
   if (seen.verdict === "claimed") {
-    say(`  ${warn()} claimed but not pinned: setup is unfinished, so /bootstrap has no serverId to check against yet.`);
-    say(`      Ownership rests on the port having been silent when pid ${held.run?.serverPid} bound it.`);
-    say(`      ${dim("control-firetower up")} finishes steps 4 to 6 and pins it.`);
+    const deliberate = Boolean(held.run?.firstRun);
+    if (deliberate) {
+      say(`  ${tick()} claimed by this run, and unprepared on purpose: both first-run gates are standing.`);
+      say(`      There is no serverId to check against until the organisation is named, so ownership`);
+      say(`      rests on the port having been silent when pid ${held.run?.serverPid} bound it.`);
+      say(`      ${dim("This is what --first-run is for: it is green for a first-run instance.")}`);
+      say(`      ${dim("control-firetower api GET /setup")}  which gate is still up`);
+    } else {
+      say(`  ${warn()} claimed but not pinned: setup is unfinished, so /bootstrap has no serverId to check against yet.`);
+      say(`      Ownership rests on the port having been silent when pid ${held.run?.serverPid} bound it.`);
+      say(`      ${dim("control-firetower up")} finishes steps 4 to 6 and pins it.`);
+    }
     say("");
-    return emit({ verdict: "claimed", checks }, EXIT.precondition);
+    return emit({ verdict: "claimed", firstRun: deliberate, checks }, exitFor(seen, held));
   }
 
   if (seen.verdict === "nothing-here") {
@@ -289,18 +334,53 @@ function hint(seen, plan) {
   return lines;
 }
 
-function instanceLine(seen) {
+function instanceLine(seen, held) {
   if (seen.verdict === "mine") return `${seen.at} is ${seen.recorded} ${dim("(recorded at launch)")}`;
-  if (seen.verdict === "claimed") return `${seen.at} is this run's by claim; no serverId yet`;
+  if (seen.verdict === "claimed") {
+    return `${seen.at} is claimed by this run; no serverId until setup finishes${held?.run?.firstRun ? " (--first-run: both gates standing, as asked for)" : ""}`;
+  }
   if (seen.verdict === "nothing-here") return `${seen.at} is silent, and nothing is recorded`;
-  const answering = seen.answer?.serverId ?? "unidentifiable";
-  const org = seen.answer?.organization ? ` "${seen.answer.organization}"` : "";
-  return `${seen.at} answers as ${answering}${org}, recorded ${seen.recorded ?? "nothing"} — NOT THIS RUN'S`;
+  /**
+   * **A port that did not answer is not a port answering strangely.**
+   *
+   * This line read `answers as unidentifiable` for every `not-mine` verdict,
+   * including `probe-failed` — where nothing answered at all. So a refused
+   * connection and a timeout both printed a sentence describing a squatter,
+   * three lines under doctor's own `port control … silent`, and sent the
+   * reader looking for a process that was not there.
+   */
+  if (seen.answer?.reachable === false) {
+    return `${seen.at} did not answer (${seen.answer.why ?? seen.cause}); this run recorded ${seen.recorded ?? "nothing"} there — NOTHING IS HOLDING IT`;
+  }
+  /* Answering, but will not say which Firetower it is — which is a different
+     thing again from answering with somebody else's id. */
+  if (!seen.answer?.serverId) {
+    return `${seen.at} answered but would not say which Firetower it is, recorded ${seen.recorded ?? "nothing"} — NOT THIS RUN'S`;
+  }
+  const org = seen.answer.organization ? ` "${seen.answer.organization}"` : "";
+  return `${seen.at} answers as ${seen.answer.serverId}${org}, recorded ${seen.recorded ?? "nothing"} — NOT THIS RUN'S`;
 }
 
-function exitFor(seen) {
+/**
+ * The exit code, and the one case where `claimed` is a pass.
+ *
+ * `claimed` used to be exit 4 unconditionally, which made the baseline's
+ * "`doctor` green" unreachable on a `--first-run` instance — the one the
+ * first four features need. But `claimed` covers two different situations and
+ * the lock is what tells them apart:
+ *
+ *   firstRun     brought up unprepared on purpose. Both gates are standing
+ *                because that is what was asked for, there is no serverId
+ *                because the organisation has not been named, and the run is
+ *                usable by `drive`, `api` and `reset`. That is a pass
+ *   otherwise    a plain `up` that did not reach step 6. Setup is genuinely
+ *                unfinished and `up` has to be re-run, which is a
+ *                precondition rather than a verdict about ownership
+ */
+function exitFor(seen, held) {
   if (seen.verdict === "mine") return EXIT.ok;
   if (seen.verdict === "not-mine") return EXIT.notMine;
+  if (seen.verdict === "claimed" && held?.run?.firstRun) return EXIT.ok;
   return EXIT.precondition;
 }
 

@@ -158,6 +158,11 @@ export function sanitise(text, secrets = [], { fields = true } = {}) {
 export function sanitiseCapture(capture, secrets) {
   const snapshot = sanitise(capture.snapshotText, secrets);
   const logs = (capture.consoleErrors ?? []).map((line) => sanitise(line, secrets, { fields: false }));
+  /* `consoleFindings` is the same text with the known noise taken out, and it
+     is what the posted comment actually prints. It has to go through the same
+     scrub: the spread below would otherwise carry it out unredacted, which is
+     the whole channel this function exists to close. */
+  const findings = (capture.consoleFindings ?? []).map((line) => sanitise(line, secrets, { fields: false }));
   const thrown = (capture.pageErrors ?? []).map((line) => sanitise(line, secrets, { fields: false }));
   const readback = capture.readback
     ? sanitise(JSON.stringify(capture.readback.saw), secrets, { fields: false })
@@ -166,6 +171,7 @@ export function sanitiseCapture(capture, secrets) {
   const removed = [
     ...snapshot.removed,
     ...logs.flatMap((l) => l.removed),
+    ...findings.flatMap((f) => f.removed),
     ...thrown.flatMap((t) => t.removed),
     ...(readback?.removed ?? []),
   ];
@@ -175,11 +181,18 @@ export function sanitiseCapture(capture, secrets) {
       ...capture,
       snapshotText: snapshot.text,
       consoleErrors: logs.map((l) => l.text),
+      ...(capture.consoleFindings ? { consoleFindings: findings.map((f) => f.text) } : {}),
       pageErrors: thrown.map((t) => t.text),
       ...(capture.readback ? { readback: { ...capture.readback, saw: readback.text } } : {}),
     },
     removed: [...new Set(removed)],
-    /* Counted and named, never claimed to be redacted. */
-    images: capture.screenshot ? [capture.screenshot] : [],
+    /* Counted and named, never claimed to be redacted — and that includes
+       the states a journey photographed on the way through. A count that
+       named fewer pictures than the comment publishes is the kind of number
+       that rots quietly, which is exactly what this report exists to stop. */
+    images: [
+      ...(capture.screenshot ? [capture.screenshot] : []),
+      ...(capture.alongside ?? []).map((shot) => shot.at),
+    ],
   };
 }

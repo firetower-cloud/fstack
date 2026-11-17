@@ -112,6 +112,12 @@ EXIT CODES
                             not tear down a project it has no record of
                             starting
        probe-failed         the recorded server stopped answering
+       endpoint-not-mine    an ssh address was given to drive that 'docker ps'
+                            does not show as a container this run started.
+                            'Add it' makes the control plane open an ssh
+                            connection to whatever is typed, so the address is
+                            an action and ownership of it is asserted the same
+                            way as everything else here
   3  the transport cannot support the claim you are making
   4  a precondition is missing; nothing is up, or nothing is recorded
   5  doing that would destroy evidence that has not been posted
@@ -204,7 +210,7 @@ export const COMMANDS = {
     5  login          POST /api/v1/auth/login, and the token into the run lock
     6  setup          POST /setup/organization and /setup/complete, or the
                       desktop shows the setup wizard instead of the app
-                      (desktop/src/ui/Gate.tsx:47)
+                      (desktop/src/ui/Gate.tsx:46)
 
   Then /bootstrap finally has a serverId, and 'up' records it. That recorded
   id is what every later command checks before it touches anything.
@@ -221,6 +227,19 @@ USAGE
   control-firetower up [--rebuild] [--dry-run] [--json]
 
 OPTIONS
+  --first-run    do steps 1 to 3 only, and leave both first-run gates
+                 standing. The administrator is seeded through
+                 ADMIN_INITIAL_PASSWORD, which still sets
+                 must_change_password — "a credential that came out of a file
+                 cannot quietly become the permanent one" — so the forced
+                 password change and the setup wizard can be DRIVEN rather
+                 than skipped. Nothing else in the firetower checkout
+                 exercises either (firetower#336). The run stays in phase
+                 'claimed': /bootstrap has no serverId until the organisation
+                 is named, so ownership rests on this run having bound a
+                 silent port and its child still running exactly what it
+                 launched. 'reset --first-run' gets there from a running
+                 instance in about 3s
   --rebuild      cargo build even if target/debug/firetower exists
   --dry-run      print the six steps, with the real ports and paths, and do
                  nothing. Safe to run first, and worth it on a machine you
@@ -325,13 +344,13 @@ EXAMPLES
 
   The frontend transport: playwright-core against the desktop's own Vite
   renderer, pointed at this run's ft-server. This is the production user path
-  rather than a test hook — the app's first screen is "type a control plane
-  address and Connect" — and desktop/src/bridge.ts exists precisely so the
-  app renders in an ordinary tab.
+  rather than a test hook — the app's first screen asks where your Firetower
+  is, and you type an address and press Continue — and desktop/src/bridge.ts
+  exists precisely so the app renders in an ordinary tab.
 
-  Each call opens the app, signs in with this run's administrator, gets past
-  the forced password change and the setup wizard, goes where you asked, and
-  captures the resulting state: a screenshot, an accessibility snapshot, the
+  Each call opens the app, signs in with this run's administrator, ASSERTS
+  that neither first-run gate is on screen rather than assuming it, goes
+  where you asked, and captures the resulting state: a screenshot, an accessibility snapshot, the
   page's console errors, and the command that produced them. A screenshot
   verifies layout and never a value, which is why the snapshot is not
   optional.
@@ -348,11 +367,47 @@ SUBCOMMANDS
                       change: a selector list that has never been driven is
                       the rot a feature map exists to prevent
   open <state>        go to a state and capture it
-  act <gesture>       perform a named gesture, then capture
+  act <gesture>       perform a named gesture or a first-run journey, then
+                      capture. 'drive states' lists both
   signin              just the sign-in sequence, for checking the renderer
+
+THE FIRST-RUN JOURNEYS
+  Three of what 'act' takes are journeys rather than gestures: they start at
+  the renderer's root with nothing remembered, and walk the screens a person
+  meets before the app — the address screen, the forced password change and
+  the setup wizard. They exist because NOTHING in the firetower checkout
+  exercises those: the mock harness seeds localStorage and never signs in,
+  and the live one clears both gates over the API before the window opens
+  (firetower#336).
+
+    connect-an-address              either instance
+    replace-the-temporary-password  needs 'up --first-run'
+    name-this-firetower             needs 'up --first-run'
+
+  The last two are ONE-SHOT: driving one clears the gate it is about, which
+  is what makes it a proof. 'reset --first-run' makes another instance in
+  about 3s. A journey photographs every state it asserts on the way through,
+  not only the one it ends in — the password screen is gone by the time the
+  journey has finished opening it.
+
+  One step of one journey is not driven through the app: replacing the
+  password. The desktop deliberately carries no password form, so that
+  happens on the control plane's web interface. It is performed over the API,
+  recorded on the capture, and printed in the posted comment as 'Not driven
+  through the app'.
 
 OPTIONS
   --as <name>         name this capture; it becomes the evidence filename
+  --at <user@host:port>
+                      the ssh endpoint for a gesture that adds a machine.
+                      Refused unless 'docker ps' shows a container carrying
+                      this session's label publishing that port: pressing
+                      'Add it' makes the CONTROL PLANE open an ssh connection
+                      to whatever is in the field, so the address is an action
+  --remote <path|url> the remote for the gesture that adds a repository. The
+                      probe behind it is answered by a machine, not by the
+                      control plane, so it has to be something the machine
+                      can see
   --feature <id>      the feature-map entry this proof is for. Recorded with
                       the capture, so a proof is traceable to the entry that
                       demanded it and a different path can never be reported
@@ -365,19 +420,20 @@ OPTIONS
   --json              the capture manifest as data
 
 THE SELECTOR VOCABULARY IS COPIED, VERIFIED, NOT TRUSTED
-  Every handle is copied from desktop/scripts/states.mjs or
-  desktop/e2e/cursor-live.mjs with a comment saying which line it came from —
-  the bundle is self-contained, so it cannot import them, and the comment is
-  what makes a drift traceable.
+  Every handle carries the source it came from. The bundle is self-contained
+  so it cannot import the checkout's harnesses, and the citation is what makes
+  a drift traceable.
 
-  But a copy is a starting list, not a source of truth. The two harnesses in
-  the checkout DISAGREE WITH EACH OTHER: states.mjs drives /^Connect$/
-  against the mock server while cursor-live.mjs is stale against a real one,
-  and neither had been checked against the application recently. So every
-  handle this ships was driven against a real build before it shipped, and
-  anything that could not be reached is marked rather than assumed.
-  'drive audit' is how that stays true. A CLI with confident wrong selectors
-  is worse than no CLI, because its failures look like application bugs.
+  But a copy that was read is a starting list, not a source of truth. THE
+  FIRST 28 HANDLES WERE ASSEMBLED BY READING THE REPOSITORY AND 6 OF THEM
+  WERE WRONG -- wrong about the build that was running when they were read,
+  not stale by a release. So every handle this ships was driven against a real
+  build before it shipped, and anything that could not be reached is marked
+  rather than assumed. 'drive audit' is how that stays true, and
+  'node --test test/citations.test.mjs' re-reads every file:line this bundle
+  cites, which is the half that was missing. A CLI with confident wrong
+  selectors is worse than no CLI, because its failures look like application
+  bugs.
 
 WHAT A PASSING RUN HERE DOES NOT MEAN
   See 'control-firetower limits'. Every member of bridge.ts differs between a
@@ -587,7 +643,14 @@ OPTIONS
                    'shell' is the WebdriverIO run in CI, which this binary
                    reads evidence from and cannot launch. 'any' is the list
                    nothing automated proves
-  --touched <path> repeatable, repository-relative. Exit 3 if a Chrome run
+  --touched <path> repeatable OR comma-separated, and both are documented
+                   because both work:
+                     --touched a.ts --touched b.ts
+                     --touched a.ts,b.ts
+                   A comma list used to be read as one filename, which does
+                   not exist, which read as OUTSIDE — the right answer for the
+                   wrong reason, and wrong the moment one of the paths was
+                   native. Repository-relative. Exit 3 if a Chrome run
                    cannot support a claim about it, with the import chain
                    that makes it so. NEEDS THE CHECKOUT, because the graph is
                    read from it: with no checkout every path under

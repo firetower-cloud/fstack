@@ -22,6 +22,9 @@ const BOOLEANS = new Set([
   "full-page",
   "keep-browser",
   "headed",
+  /* `up --first-run`: steps 1 to 3 only, so both first-run gates still
+     stand and the journeys about them can be driven. */
+  "first-run",
 ]);
 
 const SHORT = { h: "help", q: "quiet", v: "verbose", V: "version" };

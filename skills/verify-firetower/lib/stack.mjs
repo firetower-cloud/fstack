@@ -27,6 +27,17 @@ import { EXIT, fail, emit, say, step, done, note, table, dim } from "./out.mjs";
 
 const run = promisify(execFile);
 const STEPS = 6;
+/**
+ * `up --first-run` stops after four of them, deliberately.
+ *
+ * Steps 4 and 6 are the two that clear the first-run gates, so an instance
+ * that has had them done cannot show either screen. A run that wants to drive
+ * the forced password change or the setup wizard needs an instance that has
+ * not: build, Postgres, a server with a seeded administrator, and a token.
+ * Nothing else. firetower#336 is why this exists — those two journeys were
+ * exercised by nothing in the checkout.
+ */
+const FIRST_RUN_STEPS = 4;
 
 /**
  * This run's Postgres, as a compose file of its own.
@@ -75,12 +86,26 @@ const compose = (plan, ...args) =>
     maxBuffer: 1 << 24,
   });
 
-export function serverEnv(plan) {
+export function serverEnv(plan, { adminPassword } = {}) {
   return {
     ...process.env,
     DATABASE_URL: databaseUrl(plan),
     FIRETOWER_HOME: plan.home,
     FIRETOWER_PUBLIC_URL: `http://127.0.0.1:${plan.renderer.value}`,
+    /**
+     * Only for `up --first-run`: seed the first administrator's password
+     * instead of inventing one and printing it.
+     *
+     * `ensure_admin` (crates/ft-server/src/lib.rs:383-427) takes it when no
+     * user exists yet and ignores it afterwards, and either way the account
+     * is created with `must_change_password` set
+     * (`accounts.rs:193-201`) — "a credential that came out of a file cannot
+     * quietly become the permanent one". So this makes the forced password
+     * change *reachable* rather than skipping it, and it is the unattended
+     * route: the invented password is written to the server's stderr and
+     * would have to be scraped back out of a log file.
+     */
+    ...(adminPassword ? { ADMIN_INITIAL_PASSWORD: adminPassword, ADMIN_USERNAME: "admin" } : {}),
   };
 }
 
@@ -119,6 +144,8 @@ export function describe(plan) {
 }
 
 export async function up(plan, flags) {
+  const firstRun = Boolean(flags["first-run"]);
+  const total = firstRun ? FIRST_RUN_STEPS : STEPS;
   mkdirSync(plan.scratch, { recursive: true, mode: 0o700 });
   mkdirSync(plan.logs, { recursive: true });
   mkdirSync(plan.evidence, { recursive: true });
@@ -140,6 +167,30 @@ export async function up(plan, flags) {
        ECONNREFUSED and `lsof` showed the port free. An agent then goes
        looking for a process that is not there. */
     return refuse(seen, whyUpRefused(seen, plan));
+  }
+  /* A `claimed` instance is this run's own, answering, and deliberately
+     unprepared. Binding the port again would spawn a second server that
+     cannot have it and then report that the server never answered, so this
+     says what is actually there instead — which is the state `--first-run`
+     leaves behind, and the one its journeys need. */
+  if (seen.verdict === "claimed") {
+    const held = readLock(plan).run ?? {};
+    say("");
+    say(`${dim("already up, with its gates standing")} ${seen.at} is this run's by claim`);
+    say("");
+    table([
+      "This instance",
+      ["phase", `${held.phase}  ${dim("/bootstrap has no serverId until the organisation is named")}`],
+      ["first run", held.firstRun ? "yes — both gates stand" : dim("not recorded as a first-run instance")],
+      ["server pid", String(held.serverPid ?? "-")],
+    ]);
+    say("");
+    say("  Drive the journeys that need it, or start the run over:");
+    say("    control-firetower drive act replace-the-temporary-password");
+    say("    control-firetower drive act name-this-firetower");
+    say("    control-firetower down && control-firetower up");
+    say("");
+    return emit({ already: true, instance: seen, firstRun: Boolean(held.firstRun) }, EXIT.ok);
   }
 
   /* The Postgres port gets the same treatment, with one allowance: a
@@ -178,33 +229,58 @@ export async function up(plan, flags) {
       ["3 serve", `firetower serve --dev --port ${plan.control.value} --bind 127.0.0.1`],
       ["  env", `DATABASE_URL=${databaseUrl(plan)}`],
       ["  env", `FIRETOWER_HOME=${plan.home}`],
-      ["4 passwd", `firetower passwd admin  ${dim("(password piped on stdin)")}`],
-      ["5 login", `POST ${serverUrl(plan)}/api/v1/auth/login`],
-      ["6 setup", `POST /api/v1/setup/organization, POST /api/v1/setup/complete`],
-      ["then", "record /bootstrap's serverId in the run lock"],
+      ...(firstRun
+        ? [
+            ["  env", `ADMIN_INITIAL_PASSWORD=${dim("24 random bytes, written only to the run lock")}`],
+            ["4 login", `POST ${serverUrl(plan)}/api/v1/auth/login  ${dim("a token, and 403 on every other route")}`],
+            ["not run", dim("passwd admin — so must_change_password still stands")],
+            ["not run", dim("/setup/organization and /setup/complete — so the wizard still stands")],
+            ["then", "phase claimed, firstRun recorded. There is no serverId to record until the organisation is named"],
+          ]
+        : [
+            ["4 passwd", `firetower passwd admin  ${dim("(password piped on stdin)")}`],
+            ["5 login", `POST ${serverUrl(plan)}/api/v1/auth/login`],
+            ["6 setup", `POST /api/v1/setup/organization, POST /api/v1/setup/complete`],
+            ["then", "record /bootstrap's serverId in the run lock"],
+          ]),
     ]);
     say("");
     return emit({ dryRun: true, plan: lockable(plan) });
   }
 
   writeFileSync(plan.compose, composeFile(plan));
+  /**
+   * The lock is written before step 1, and `server` deliberately is not.
+   *
+   * The lock has to exist from the start: it records the Compose project and
+   * the ports, and without it a `down` after a failed build has nothing to
+   * tear down. But `server` used to be written here too, so a build that
+   * failed left a lock claiming a control plane at an address nothing had
+   * ever listened on. `claimed` is defined as *this run bound a silent port
+   * and its child is alive*, and in that state there was no child — the next
+   * `up` read the recorded address as `probe-failed` and refused until `down`
+   * was run.
+   *
+   * So the address is recorded at step 3, by the code that started something,
+   * once it has answered. Nothing claims a server before there is one.
+   */
   writeLock(plan, {
     key: plan.key,
     startedAt: new Date().toISOString(),
     phase: PHASE.claimed,
     checkout: plan.checkout,
-    server: serverUrl(plan),
     ports: { control: plan.control.value, postgres: plan.postgres.value, renderer: plan.renderer.value },
     project: plan.project,
     home: plan.home,
     session: plan.session,
     serverId: null,
+    firstRun,
     evidence: [],
     posted: [],
   });
 
   /* 1 — build */
-  step(1, STEPS, "cargo build -p ft-cli");
+  step(1, total, "cargo build -p ft-cli");
   let at = Date.now();
   if (existsSync(binary(plan)) && !flags.rebuild) {
     note(`${binary(plan)} is there; --rebuild to build anyway`);
@@ -226,7 +302,7 @@ export async function up(plan, flags) {
   }
 
   /* 2 — postgres */
-  step(2, STEPS, `docker compose -p ${plan.project} up -d postgres`);
+  step(2, total, `docker compose -p ${plan.project} up -d postgres`);
   at = Date.now();
   try {
     await compose(plan, "up", "-d", "--wait", "postgres");
@@ -246,27 +322,73 @@ export async function up(plan, flags) {
   done(`postgres on 127.0.0.1:${plan.postgres.value}`, Date.now() - at);
 
   /* 3 — serve */
-  step(3, STEPS, `firetower serve --dev --port ${plan.control.value}`);
+  step(3, total, `firetower serve --dev --port ${plan.control.value}`);
   at = Date.now();
   mkdirSync(plan.home, { recursive: true, mode: 0o700 });
   const out = openSync(path.join(plan.logs, "server.out"), "a");
   const err = openSync(path.join(plan.logs, "server.err"), "a");
+  /* The seeded administrator, for `--first-run` only. Generated the way step
+     4 generates one and written only to the run lock, so the credential this
+     run drives with is still not derivable from anything that is printed. */
+  const seeded = firstRun ? newPassword() : null;
+  if (seeded) updateLock(plan, { adminPassword: seeded });
   const server = spawn(binary(plan), serveArgs(plan), {
     cwd: plan.checkout,
-    env: serverEnv(plan),
+    env: serverEnv(plan, { adminPassword: seeded }),
     detached: true,
     stdio: ["ignore", out, err],
+  });
+  /**
+   * A spawn that never started.
+   *
+   * `child_process` reports this as an `error` event on a later tick, and with
+   * no listener Node turns it into an uncaught exception: a raw stack trace,
+   * and an exit code that is not one of the six this CLI documents. An agent
+   * branching on status reads whatever that happens to be as a verdict about
+   * Firetower. So it is caught, and it becomes an ordinary refusal that names
+   * the binary and what to do — which is what every other failure here does.
+   */
+  let unstarted = null;
+  server.once("error", (error) => {
+    unstarted = error;
   });
   server.unref();
   /* The command line goes in beside the pid. A pid alone is a number
      somebody wrote down, and pids are recycled; teardown checks both. */
+  /* And the address, here rather than before step 1: there is now a child
+     process bound to it, which is exactly what `claimed` asserts. Recorded
+     before the probe rather than after, so that a server which starts and
+     then never answers is `probe-failed` — a thing that went wrong, with
+     `down` named — instead of reading as a port nobody ever touched. */
   updateLock(plan, {
+    server: serverUrl(plan),
     serverPid: server.pid,
     serverCommand: serverCommand(plan),
     serverStartedAt: new Date().toISOString(),
   });
 
-  const answered = await waitFor(() => probe(serverUrl(plan)), (a) => a.reachable, 40_000);
+  const answered = await waitFor(() => probe(serverUrl(plan)), (a) => a.reachable, 40_000, () => unstarted);
+  if (unstarted) {
+    return fail(EXIT.failed, {
+      problem: `ft-server could not be started: ${unstarted.message}`,
+      because: [
+        `the binary this run expected is ${binary(plan)}`,
+        `it was spawned with the checkout as its working directory (${plan.checkout})`,
+        unstarted.code === "ENOENT"
+          ? "ENOENT means that path does not exist from there"
+          : `the system said ${unstarted.code ?? "nothing more"}`,
+      ],
+      instead: [
+        `cd ${plan.checkout} && cargo build -p ft-cli    build it`,
+        "control-firetower up --rebuild                 build it as part of coming up",
+        "control-firetower down                         clear the lock this attempt wrote",
+        "",
+        "If you passed --checkout, it is resolved to an absolute path before anything is",
+        "spawned, so this is about the binary rather than about the path.",
+      ],
+      detail: { cause: "server-unstarted", binary: binary(plan), code: unstarted.code ?? null },
+    });
+  }
   if (!answered) {
     return fail(EXIT.failed, {
       problem: `ft-server started as pid ${server.pid} and never answered on ${serverUrl(plan)}`,
@@ -285,8 +407,56 @@ export async function up(plan, flags) {
   }
   done(`answering on ${serverUrl(plan)}`, Date.now() - at);
 
+  /* `--first-run` stops here, which is the whole point of it: steps 4 and 6
+     are what clear the two gates, so an instance that wants to show them has
+     to not have had them. One login, so the credential is proven to work and
+     `doctor` has a token to ask /setup with — and the 403 it gets back is
+     itself the readback for the forced password change. */
+  if (firstRun) {
+    step(4, total, "POST /api/v1/auth/login");
+    at = Date.now();
+    const got = await signIn(plan);
+    if (!got.ok) {
+      return fail(EXIT.failed, {
+        problem: `signing in as the seeded administrator answered ${got.status}`,
+        because: [
+          JSON.stringify(got.body),
+          "ADMIN_INITIAL_PASSWORD is read by ensure_admin only while no user exists (lib.rs:383-391), so a database that already had one ignored it",
+        ],
+        instead: [
+          "control-firetower down --all     end this run and its database",
+          "control-firetower up --first-run  a fresh database seeds the administrator again",
+          "",
+          "`reset --first-run` is the cheap route: it drops the database and comes back",
+          "here in about 3s.",
+        ],
+      });
+    }
+    done(`signed in as ${got.user?.username ?? "admin"}`, Date.now() - at);
+    updateLock(plan, { firstRun: true });
+
+    say("");
+    table([
+      "Up, and deliberately unprepared",
+      ["phase", `${PHASE.claimed}  ${dim("owned by having bound a silent port, not by a serverId")}`],
+      ["control plane", serverUrl(plan)],
+      ["administrator", `admin  ${dim("must_change_password is set: every other authenticated route answers 403")}`],
+      ["organisation", dim("unnamed, so /bootstrap has no serverId and the desktop draws the setup wizard")],
+      ["renderer", await rendererLine(plan)],
+      ["run lock", plan.lock],
+    ]);
+    say("");
+    say(`  ${dim("the two journeys nothing else in the checkout exercises")}`);
+    say("    control-firetower drive act replace-the-temporary-password");
+    say("    control-firetower drive act name-this-firetower");
+    say("");
+    say(`  ${dim("each is one-shot: it clears the gate it is about. reset --first-run makes another instance.")}`);
+    say("");
+    return emit({ firstRun: true, phase: PHASE.claimed, server: serverUrl(plan), plan: lockable(plan) });
+  }
+
   /* 4 — the forced password change, cleared in the same statement */
-  step(4, STEPS, "firetower passwd admin");
+  step(4, total, "firetower passwd admin");
   at = Date.now();
   /* Generated here, kept only in the lock, never derived from anything that
      is printed or published — see newPassword() in key.mjs. */
@@ -310,7 +480,7 @@ export async function up(plan, flags) {
   note(`the administrator password is random per run and lives only in ${plan.lock}`);
 
   /* 5 — a token */
-  step(5, STEPS, "POST /api/v1/auth/login");
+  step(5, total, "POST /api/v1/auth/login");
   at = Date.now();
   const signedIn = await signIn(plan);
   if (!signedIn.ok) {
@@ -326,7 +496,7 @@ export async function up(plan, flags) {
   done(`signed in as ${signedIn.user?.username ?? "admin"}`, Date.now() - at);
 
   /* 6 — setup, or the desktop shows the wizard instead of the app */
-  step(6, STEPS, "POST /api/v1/setup/organization, POST /api/v1/setup/complete");
+  step(6, total, "POST /api/v1/setup/organization, POST /api/v1/setup/complete");
   at = Date.now();
   const named = await raw(plan, "POST", "/setup/organization", {
     token: signedIn.token,
@@ -366,7 +536,7 @@ export async function up(plan, flags) {
     ["organisation", pinned.organization ?? "-"],
     ["version", pinned.version ?? "-"],
     ["control plane", serverUrl(plan)],
-    ["renderer", `not started. cd desktop && pnpm exec vite --port ${plan.renderer.value} --strictPort`],
+    ["renderer", await rendererLine(plan)],
     ["run lock", plan.lock],
   ]);
   say("");
@@ -444,7 +614,28 @@ export async function reset(plan, flags) {
     });
   }
   const seen = await verdict(plan);
-  if (seen.verdict !== "mine" && seen.verdict !== "nothing-here") return refuse(seen);
+  /**
+   * `claimed` resets, and that is the phase `up --first-run` leaves behind.
+   *
+   * This used to accept `mine` and `nothing-here` only, so
+   * `reset --first-run` refused from the one phase it is most wanted in —
+   * `forced-password-change.md`'s first driving row is *"make an instance that
+   * has never been through this → `control-firetower reset --first-run`"*, and
+   * `up --first-run`'s own last line says `reset --first-run` makes another
+   * one. Neither was true: a sweep needing a second first-run instance had to
+   * `down` and `up` again, paying the whole start-up cost for it.
+   *
+   * **Allowing it does not weaken the guard on the destructive half.** What
+   * authorises stopping the server is not the verdict: it is `stopPid` below,
+   * which refuses unless `ps` agrees the recorded pid is running exactly the
+   * command line this run launched. That check is unchanged, and in `claimed`
+   * it is the *same* fact ownership already rests on — this run bound a silent
+   * port and its own child is still alive. The database being dropped is this
+   * run's own, in its own Compose project, named explicitly.
+   */
+  if (seen.verdict !== "mine" && seen.verdict !== "claimed" && seen.verdict !== "nothing-here") {
+    return refuse(seen);
+  }
 
   const statements = [
     `DROP DATABASE IF EXISTS firetower WITH (FORCE)`,
@@ -520,6 +711,23 @@ export async function reset(plan, flags) {
   });
   const again = await up({ ...plan }, { ...flags, rebuild: false });
   return again;
+}
+
+/**
+ * The renderer line, asked rather than asserted.
+ *
+ * This said `not started` unconditionally — including on a `reset`, which
+ * reaches this summary through `up` and does not touch the renderer at all.
+ * So a run with Vite happily serving was told its renderer was not started,
+ * three seconds after `doctor` had reported it answering. A line that states
+ * something checkable without checking it is the same class of defect as a
+ * stale citation.
+ */
+async function rendererLine(plan) {
+  if (await listening(plan.renderer.value)) {
+    return `answering on http://localhost:${plan.renderer.value}  ${dim("already running; nothing here starts or stops it")}`;
+  }
+  return `not started. cd ${path.join(plan.checkout, "desktop")} && pnpm exec vite --port ${plan.renderer.value} --strictPort`;
 }
 
 /**
@@ -836,12 +1044,23 @@ function whyUpRefused(seen, plan) {
   ];
 }
 
-async function waitFor(get, ok, ms) {
+/**
+ * Poll until something is true, or give up.
+ *
+ * `giveUp` is a second exit: a predicate asked each time round that means
+ * "stop waiting, this is never going to happen". `up` passes the spawn's own
+ * `error` event through it, so a binary that could not be started is reported
+ * in a second instead of after the full 40-second timeout for a server that
+ * started and stayed quiet. The two are different failures and the operator
+ * is told which.
+ */
+async function waitFor(get, ok, ms, giveUp = () => false) {
   const until = Date.now() + ms;
   for (;;) {
+    if (giveUp()) return null;
     const answer = await get();
     if (ok(answer)) return answer;
-    if (Date.now() > until) return null;
+    if (Date.now() > until || giveUp()) return null;
     await new Promise((r) => setTimeout(r, 250));
   }
 }

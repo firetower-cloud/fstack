@@ -109,6 +109,18 @@ const SCHEMA = {
   token: "string?",
   user: "string?",
   adminPassword: "string?",
+  /**
+   * This instance was brought up deliberately unprepared, and both first-run
+   * gates still stand.
+   *
+   * It is in the lock rather than re-derived because the two facts that make
+   * it true — `must_change_password` and an unnamed organisation — are
+   * answered by routes that 403 until the first of them is cleared, so a
+   * command cannot cheaply ask. `drive` reads it to know which journeys the
+   * instance can carry, and clears it when the journeys have cleared the
+   * gates.
+   */
+  firstRun: "boolean?",
   organization: "string?",
   evidence: "array?",
   posted: "array?",
@@ -133,6 +145,8 @@ function checkField(name, rule, value) {
   switch (kind) {
     case "string":
       return typeof value === "string" ? null : `${name} is ${typeof value}, not a string`;
+    case "boolean":
+      return typeof value === "boolean" ? null : `${name} is ${typeof value}, not a boolean`;
     case "url":
       return typeof value === "string" && /^https?:\/\/[^\s/]+$/.test(value)
         ? null
