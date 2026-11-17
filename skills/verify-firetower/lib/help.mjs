@@ -258,8 +258,13 @@ USAGE
   control-firetower drive <subcommand> [options]
 
 SUBCOMMANDS
-  states              list the states this build can be driven into, and the
-                      selector each one uses
+  states              list the states this build can be driven into, the
+                      handle each one is identified by, and where it came from
+  audit               drive every handle in the vocabulary against the running
+                      app and report which still match. Run this first if
+                      anything is behaving strangely, and run it after any UI
+                      change: a selector list that has never been driven is
+                      the rot a feature map exists to prevent
   open <state>        go to a state and capture it
   act <gesture>       perform a named gesture, then capture
   signin              just the sign-in sequence, for checking the renderer
@@ -277,13 +282,20 @@ OPTIONS
   --full-page         full-page screenshot rather than the 1280x824 viewport
   --json              the capture manifest as data
 
-THE SELECTOR VOCABULARY IS COPIED, NOT IMPORTED
-  Every selector here is copied from desktop/scripts/states.mjs and the
-  sign-in sequence from desktop/e2e/cursor-live.mjs, each with a comment
-  saying which line it came from. That is the cost of a self-contained
-  bundle: the copies can drift, and the comments are what make the drift
-  traceable. 'drive states --json' prints each selector with its origin so a
-  reviewer can diff them against the checkout.
+THE SELECTOR VOCABULARY IS COPIED, VERIFIED, NOT TRUSTED
+  Every handle is copied from desktop/scripts/states.mjs or
+  desktop/e2e/cursor-live.mjs with a comment saying which line it came from —
+  the bundle is self-contained, so it cannot import them, and the comment is
+  what makes a drift traceable.
+
+  But a copy is a starting list, not a source of truth. The two harnesses in
+  the checkout DISAGREE WITH EACH OTHER: states.mjs drives /^Connect$/
+  against the mock server while cursor-live.mjs is stale against a real one,
+  and neither had been checked against the application recently. So every
+  handle this ships was driven against a real build before it shipped, and
+  anything that could not be reached is marked rather than assumed.
+  'drive audit' is how that stays true. A CLI with confident wrong selectors
+  is worse than no CLI, because its failures look like application bugs.
 
 WHAT A PASSING RUN HERE DOES NOT MEAN
   See 'control-firetower limits'. Eleven of bridge.ts's twelve members are

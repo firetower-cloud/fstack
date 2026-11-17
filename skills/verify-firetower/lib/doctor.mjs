@@ -144,7 +144,10 @@ export async function doctor(plan, flags) {
     ["TRUNCATE ... CASCADE as a reset", "reaches skill_files, blobs and roles; GET /api/v1/skills then answers [] forever"],
   ];
 
-  const failed = checks.filter((c) => c.state === "no");
+  /* Unposted evidence is reported and does not change the exit code: it is a
+     thing to do next, not a reason this run cannot drive. `down` is where it
+     is a refusal, because that is where the proof is actually at risk. */
+  const failed = checks.filter((c) => c.state === "no" && c.check !== "evidence");
 
   if (flags.json) {
     const exit = exitFor(seen, held);

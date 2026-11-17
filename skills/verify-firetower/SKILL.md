@@ -116,6 +116,7 @@ already in the repository, one line long.
 
 ```sh
 ./control-firetower drive states                         # the vocabulary, with origins
+./control-firetower drive audit                          # re-drive every handle against the app
 ./control-firetower drive open tasks --as tasks --feature tasks
 ./control-firetower drive act add-a-machine --as probing
 ```
@@ -127,14 +128,40 @@ captures a screenshot, an accessibility snapshot — a screenshot verifies
 layout and never a value — the page's console output, and the command that
 produced the state.
 
-**The selectors are copies, not imports.** `lib/vocabulary.mjs` holds them,
-each with the file and line it came from in `desktop/scripts/states.mjs` and
-`desktop/e2e/cursor-live.mjs`. That is the price of a bundle that can be
-lifted into another repository: the copies drift, and the attribution is what
-makes a drift traceable. One was already stale when this was written — the
-address step's button is `Continue`, and `cursor-live.mjs:30` still clicks
-`Connect`. When a handle stops matching, `drive` says so as a finding and
-names the origin to diff; it does not crash.
+**The selectors are copies, and the copies were verified rather than
+trusted.** `lib/vocabulary.mjs` holds them, each with the file and line it
+came from in `desktop/scripts/states.mjs` or `desktop/e2e/cursor-live.mjs`.
+That attribution is the price of a bundle that can be lifted into another
+repository — and it turned out to be worth more than expected, because **the
+two harnesses in the checkout disagree with each other**:
+
+- `desktop/scripts/states.mjs:484,492` drives `/^Connect$/`, against the mock
+  server.
+- `desktop/e2e/cursor-live.mjs` is stale against a real one — its sign-in
+  clicks `Connect` where the app now renders `Continue`
+  (`desktop/src/ui/Connect.tsx:224`), so it could not have run anywhere.
+
+Neither had been checked against the running application recently. So "copy
+the vocabulary" cannot mean "trust it". **Every handle in this bundle was
+driven against a real build before it shipped**, on 2026-11-17 against
+`0.55.0`, and that is what `drive audit` re-asks:
+
+```sh
+./control-firetower drive audit     # exit 6 if any shipped handle no longer matches
+```
+
+Three entries copied from the harnesses were wrong and are gone or corrected,
+with the reason recorded beside each: `add-a-repository` describes an `Add`
+button that an empty repositories screen does not have; `name-a-workspace`
+expects `New workspace` to open a dialog, when the button is named
+`New workspace ⌘N` and opens nothing because the composer on the home *is*
+the new workspace; and `/configuration/roles` renders Agent profiles rather
+than Roles, so it is recorded as a route that is not the screen its name
+suggests instead of being quietly aliased. `states.mjs:11-13` has the
+doctrine and it is right: a state this build cannot reach is the finding.
+
+When a handle stops matching, `drive` reports it as a finding and names the
+origin to diff. It does not crash, and it does not guess.
 
 `--target shell` is refused. The shell transport is a WebdriverIO run with a
 per-OS driver provider, invoked by CI on three platforms, and on macOS it
@@ -272,6 +299,18 @@ drove, and what remains unexercised.
 The feature map and these selectors do not change in the same pull request as
 the UI they describe — that is the deliberate cost of keeping the bundle
 separate from the repository it verifies. Maintenance is therefore the only
-thing keeping it honest, and the procedure when a handle stops matching is:
-update the copy **and** its origin comment together. A copy whose origin is
-stale is worse than no copy.
+thing keeping it honest, and `drive audit` is the instrument: run it against a
+real stack after any UI change, and it exits 6 naming every handle that no
+longer matches and where that handle was copied from.
+
+The procedure when one fails is: update the handle **and** its origin comment
+together. A copy whose origin is stale is worse than no copy — and the two
+harnesses already in the firetower checkout are what that looks like after
+nobody runs them for a while.
+
+Two handles cannot be re-checked by `audit` and are marked rather than
+assumed: the forced password change and the setup wizard, which every
+prepared run has already cleared. They were verified once by standing up a
+deliberately unprepared instance — fresh database, `ft-server --dev`, neither
+step 4 nor step 6 — and the procedure is written into `lib/vocabulary.mjs`
+beside them.

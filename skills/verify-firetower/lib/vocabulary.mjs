@@ -45,6 +45,16 @@ export const VIEWPORT = { width: 1280, height: 824 };
 export const SCALE = 2;
 
 /**
+ * A handle: how to find one thing on screen. Role-based wherever possible,
+ * because a role and an accessible name are what an assistive technology
+ * reads, and matching on them means the capture and the assertion are about
+ * the same thing a person perceives.
+ */
+const heading = (name, level = 1) => ({ how: "role", role: "heading", name, level });
+const button = (name, exact = false) => ({ how: "role", role: "button", name, exact });
+const box = (placeholder, exact = false) => ({ how: "placeholder", handle: placeholder, exact });
+
+/**
  * The sign-in sequence, against a real server.
  *
  * COPIED FROM desktop/e2e/cursor-live.mjs:28-34, which is the closest thing
@@ -93,10 +103,36 @@ export const SIGNIN = {
   submit: { how: "role", role: "button", handle: "Sign in", from: "cursor-live.mjs:33" },
 };
 
-/** Screens that would mean the sign-in did not finish. Asserted absent. */
+/**
+ * Screens that would mean the sign-in did not finish. Asserted absent.
+ *
+ * Neither is reachable from a run `up` has prepared, which is every run — so
+ * `drive audit` cannot re-check them and says so rather than passing them.
+ * They were verified once, on 2026-11-17, by deliberately standing up an
+ * unprepared instance: a fresh database, `ft-server --dev`, and **neither**
+ * step 4 nor step 6 performed. Signing in with the password the first start
+ * prints to stderr landed on `Replace this password`; clearing
+ * `must_change_password` over the API and signing in again landed on
+ * `Name this Firetower`. Both are level-1 headings.
+ *
+ * Worth noticing while you are here: the setup wizard's submit button is also
+ * called **Continue** (`desktop/src/ui/Setup.tsx:46`), which is the same word
+ * the address step uses and a different screen. Match the heading, not the
+ * button.
+ */
 export const GATES = [
-  { name: "the forced password change", handle: "Replace this password", from: "desktop/src/ui/ReplacePassword.tsx via Connect.tsx:398-402" },
-  { name: "the setup wizard", handle: "Name this Firetower", from: "desktop/src/ui/Setup.tsx via Gate.tsx:47" },
+  {
+    name: "the forced password change",
+    landmark: heading("Replace this password"),
+    from: "desktop/src/ui/ReplacePassword.tsx via Connect.tsx:398-402",
+    verified: "2026-11-17, against an unprepared instance",
+  },
+  {
+    name: "the setup wizard",
+    landmark: heading("Name this Firetower"),
+    from: "desktop/src/ui/Setup.tsx via Gate.tsx:47",
+    verified: "2026-11-17, against an unprepared instance",
+  },
 ];
 
 /**
@@ -107,80 +143,119 @@ export const GATES = [
  * Navigation is COPIED FROM states.mjs:68-70:
  *   `page.goto(`${APP}/#${path}`, { waitUntil: "networkidle" })`
  *
- * `settle` is the pause after arrival, in ms, and the values come from the
- * same table: states.mjs uses 1100 by default, 1400 for the machines screen
- * and 1800 for a workspace.
+ * `settle` is the pause after arrival, in ms, from the same table: 1100 by
+ * default, 1400 for the machines screen, 1500 for tasks.
+ *
+ * **`landmark` is what makes each entry a claim rather than a hope**, and
+ * every one below was established by driving this build rather than by
+ * reading a harness — see this file's header for why that distinction is the
+ * whole point. `control-firetower drive audit` re-asks all of them.
+ *
+ * The level-2 headings on `account` and `updates` are deliberate: their H1 is
+ * the signed-in username and "Up to date." respectively, and both of those
+ * change with the run rather than with the screen.
  */
 export const STATES = {
-  home: { path: "/", settle: 1100, expect: "Firetower", from: "Routes.tsx:57 (the fallthrough)" },
-  tasks: { path: "/tasks", settle: 1500, expect: "Tasks", from: "states.mjs:81 `at(page, \"/tasks\", 1500)`" },
-  artifacts: { path: "/artifacts", settle: 1100, expect: "Artifacts", from: "Routes.tsx:36" },
-  schedules: { path: "/schedules", settle: 1100, expect: "Schedules", from: "Routes.tsx:41" },
-  configuration: { path: "/configuration", settle: 1400, expect: "Configuration", from: "Routes.tsx:45" },
-  machines: { path: "/configuration/machines", settle: 1400, expect: "Machines", from: "states.mjs:115 `at(page, \"/configuration/machines\", 1400)`" },
-  repositories: { path: "/configuration/repositories", settle: 1400, expect: "Repositories", from: "Configuration.tsx" },
-  "git-hosts": { path: "/configuration/git-hosts", settle: 1400, expect: "Git hosts", from: "Configuration.tsx" },
-  trackers: { path: "/configuration/trackers", settle: 1400, expect: "Trackers", from: "Configuration.tsx" },
-  skills: { path: "/configuration/skills", settle: 1400, expect: "Skills", from: "Configuration.tsx" },
-  agents: { path: "/configuration/agents", settle: 1400, expect: "Agents", from: "Configuration.tsx" },
-  people: { path: "/configuration/people", settle: 1400, expect: "People", from: "Configuration.tsx" },
-  teams: { path: "/configuration/teams", settle: 1400, expect: "Teams", from: "Configuration.tsx" },
-  roles: { path: "/configuration/roles", settle: 1400, expect: "Roles", from: "Configuration.tsx" },
-  directories: { path: "/configuration/directories", settle: 1400, expect: "Directories", from: "Configuration.tsx" },
-  vault: { path: "/configuration/vault", settle: 1400, expect: "Vault", from: "Configuration.tsx" },
-  server: { path: "/configuration/server", settle: 1400, expect: "Server", from: "Configuration.tsx" },
-  account: { path: "/account", settle: 1100, expect: "Account", from: "Routes.tsx:47" },
-  updates: { path: "/updates", settle: 1100, expect: "Updates", from: "Routes.tsx:46" },
+  home: { path: "/", settle: 1100, landmark: heading("what should we work on?"), from: "Routes.tsx:57 (the fallthrough). The H1 is a greeting off the clock, so only its tail is matched", verified: "2026-11-17" },
+  tasks: { path: "/tasks", settle: 1500, landmark: heading("Tasks"), from: "states.mjs:81 `at(page, \"/tasks\", 1500)`", verified: "2026-11-17" },
+  artifacts: { path: "/artifacts", settle: 1100, landmark: heading("Artifacts"), from: "Routes.tsx:36", verified: "2026-11-17" },
+  schedules: { path: "/schedules", settle: 1100, landmark: heading("Schedules"), from: "Routes.tsx:41", verified: "2026-11-17" },
+  machines: { path: "/configuration/machines", settle: 1400, landmark: heading("Machines"), from: "states.mjs:115 `at(page, \"/configuration/machines\", 1400)`", verified: "2026-11-17" },
+  repositories: { path: "/configuration/repositories", settle: 1400, landmark: heading("Repositories"), from: "destinations.ts:81", verified: "2026-11-17" },
+  "git-hosts": { path: "/configuration/git-hosts", settle: 1400, landmark: heading("Git hosts"), from: "Configuration.tsx", verified: "2026-11-17" },
+  trackers: { path: "/configuration/trackers", settle: 1400, landmark: heading("Trackers"), from: "Configuration.tsx", verified: "2026-11-17" },
+  skills: { path: "/configuration/skills", settle: 1400, landmark: heading("Skills"), from: "destinations.ts:79 — this is where the rail's Customize goes", verified: "2026-11-17" },
+  agents: { path: "/configuration/agents", settle: 1400, landmark: heading("Agents"), from: "Configuration.tsx", verified: "2026-11-17" },
+  people: { path: "/configuration/people", settle: 1400, landmark: heading("People"), from: "Configuration.tsx", verified: "2026-11-17" },
+  teams: { path: "/configuration/teams", settle: 1400, landmark: heading("Teams"), from: "Configuration.tsx", verified: "2026-11-17" },
+  directories: { path: "/configuration/directories", settle: 1400, landmark: heading("Directories"), from: "Configuration.tsx", verified: "2026-11-17" },
+  vault: { path: "/configuration/vault", settle: 1400, landmark: heading("Vault"), from: "Configuration.tsx", verified: "2026-11-17" },
+  server: { path: "/configuration/server", settle: 1400, landmark: heading("This Firetower"), from: "Configuration.tsx. The heading is 'This Firetower', not 'Server'", verified: "2026-11-17" },
+  account: { path: "/account", settle: 1100, landmark: heading("Password", 2), from: "Routes.tsx:47. The H1 is the signed-in username, which is per-run", verified: "2026-11-17" },
+  updates: { path: "/updates", settle: 1100, landmark: heading("Past runs", 2), from: "Routes.tsx:46. The H1 is 'Up to date.' or not, depending on the answer", verified: "2026-11-17" },
 };
+
+/**
+ * Routes that exist in the source and are not the screen their name suggests.
+ *
+ * `states.mjs:11-13` states the doctrine and it is right: "A state this build
+ * cannot reach is the finding… because a reconciliation whose gaps are
+ * invisible is a reconciliation of the states that happened to work." So
+ * these are recorded rather than quietly aliased to whatever they land on —
+ * an entry that claimed `/configuration/roles` was the roles screen would
+ * have a run verifying Agent profiles and reporting it as Roles.
+ */
+export const NOT_WHAT_THEY_SAY = [
+  { path: "/configuration/roles", lands: "Agent profiles", found: "2026-11-17", note: "the route is in the source (grep finds it in desktop/src) but this build renders Agent profiles there" },
+  { path: "/configuration", lands: "Repositories", found: "2026-11-17", note: "bare /configuration is not a screen of its own; it falls through to Repositories" },
+];
 
 /**
  * Gestures: a named action that leaves the app somewhere worth capturing.
  *
- * Each one is a sequence of handles, kept declarative so the vocabulary is
- * data a reviewer can read rather than code they have to follow. The
- * originals are the helpers in states.mjs — `probeMachine` (:113-121),
- * `fromTask` (:79-84), `inspectorTab` (:87-90) — and the comments there are
- * worth reading before adding one: "getByRole over the whole page would find
- * the first *Start* on it, which is a different task's".
+ * `then` is the post-condition, and it is the half that matters: a gesture
+ * whose steps all "succeed" while the app does nothing is the failure mode
+ * that makes a passing run misleading. `drive audit` performs each gesture
+ * and asserts its `then`.
+ *
+ * Two gestures that were copied from `cursor-live.mjs` are **gone**, because
+ * driving them proved they describe a UI that no longer exists:
+ *
+ *   `add-a-repository` (cursor-live.mjs:68-71) clicks an `Add` button on the
+ *   repositories screen. With no git host connected that screen's only action
+ *   is `Connect a provider`, which is what `connect-a-git-host` below does.
+ *
+ *   `name-a-workspace` (cursor-live.mjs:73-75) expects `New workspace` to
+ *   open a dialog with an `auth refactor` placeholder. The button exists —
+ *   named `New workspace ⌘N`, so an `exact: true` match already fails — and
+ *   pressing it opens nothing: the composer on the home *is* the new
+ *   workspace. `start-something-new` below is that journey.
  */
 export const GESTURES = {
   "add-a-machine": {
     at: "machines",
     does: "open the Add a machine dialog and type an address into it",
     from: "states.mjs:113-121 probeMachine()",
+    verified: "2026-11-17",
     steps: [
-      { click: { role: "button", name: "Add a machine" } },
+      { click: button("Add a machine") },
       { pause: 500 },
-      { fill: { placeholder: "192.0.2.10" }, with: "10.4.0.22" },
+      { fill: box("192.0.2.10"), with: "10.4.0.22" },
       { pause: 300 },
     ],
+    /* `Add it` is deliberately not pressed: it probes the address over ssh,
+       and 10.4.0.22 is somebody's network rather than ours. states.mjs
+       presses it because the mock server answers. */
+    then: button("Add it"),
   },
-  "add-a-repository": {
-    at: "repositories",
-    does: "open Add a repository and type a remote into it",
-    from: "cursor-live.mjs:68-71",
-    steps: [
-      { click: { role: "button", name: "Add", exact: true } },
-      { pause: 500 },
-      { fill: { placeholder: "git@github.com:acme/web.git" }, with: "https://github.com/firetower-cloud/fstack.git" },
-      { pause: 300 },
-    ],
-  },
-  "name-a-workspace": {
+  "start-something-new": {
     at: "home",
-    does: "open New workspace and name it",
-    from: "cursor-live.mjs:73-75",
+    does: "type into the composer on the home, which is where a workspace starts",
+    from: "driven 2026-11-17; replaces cursor-live.mjs:73-75, which describes a dialog this build does not have",
+    verified: "2026-11-17",
     steps: [
-      { click: { role: "button", name: "New workspace", exact: true } },
-      { pause: 600 },
-      { fill: { placeholder: "auth refactor" }, with: "verify-firetower smoke" },
-      { pause: 300 },
+      { fill: box("Start something new…"), with: "verify-firetower smoke" },
+      { pause: 400 },
     ],
+    /* With an empty fleet the start button is present and disabled, and says
+       so — which is a better post-condition than a happy path, because it is
+       the state a fresh verification run is actually in. */
+    then: button("Add a machine first"),
+  },
+  "connect-a-git-host": {
+    at: "repositories",
+    does: "follow the empty repositories screen to where a provider is connected",
+    from: "driven 2026-11-17; replaces cursor-live.mjs:68-71",
+    verified: "2026-11-17",
+    steps: [{ click: button("Connect a provider") }, { pause: 900 }],
+    then: heading("Git hosts"),
   },
   "open-the-palette": {
     at: "home",
     does: "press the command palette open",
     from: "states.mjs over-any-screen__k-the-palette",
-    steps: [{ press: "Meta+k" }, { pause: 600 }],
+    verified: "2026-11-17",
+    steps: [{ press: "Meta+k" }, { pause: 700 }],
+    then: box("Go to a session, or run something"),
   },
 };
