@@ -249,12 +249,26 @@ export async function up(plan, flags) {
   }
 
   writeFileSync(plan.compose, composeFile(plan));
+  /**
+   * The lock is written before step 1, and `server` deliberately is not.
+   *
+   * The lock has to exist from the start: it records the Compose project and
+   * the ports, and without it a `down` after a failed build has nothing to
+   * tear down. But `server` used to be written here too, so a build that
+   * failed left a lock claiming a control plane at an address nothing had
+   * ever listened on. `claimed` is defined as *this run bound a silent port
+   * and its child is alive*, and in that state there was no child — the next
+   * `up` read the recorded address as `probe-failed` and refused until `down`
+   * was run.
+   *
+   * So the address is recorded at step 3, by the code that started something,
+   * once it has answered. Nothing claims a server before there is one.
+   */
   writeLock(plan, {
     key: plan.key,
     startedAt: new Date().toISOString(),
     phase: PHASE.claimed,
     checkout: plan.checkout,
-    server: serverUrl(plan),
     ports: { control: plan.control.value, postgres: plan.postgres.value, renderer: plan.renderer.value },
     project: plan.project,
     home: plan.home,
@@ -324,16 +338,57 @@ export async function up(plan, flags) {
     detached: true,
     stdio: ["ignore", out, err],
   });
+  /**
+   * A spawn that never started.
+   *
+   * `child_process` reports this as an `error` event on a later tick, and with
+   * no listener Node turns it into an uncaught exception: a raw stack trace,
+   * and an exit code that is not one of the six this CLI documents. An agent
+   * branching on status reads whatever that happens to be as a verdict about
+   * Firetower. So it is caught, and it becomes an ordinary refusal that names
+   * the binary and what to do — which is what every other failure here does.
+   */
+  let unstarted = null;
+  server.once("error", (error) => {
+    unstarted = error;
+  });
   server.unref();
   /* The command line goes in beside the pid. A pid alone is a number
      somebody wrote down, and pids are recycled; teardown checks both. */
+  /* And the address, here rather than before step 1: there is now a child
+     process bound to it, which is exactly what `claimed` asserts. Recorded
+     before the probe rather than after, so that a server which starts and
+     then never answers is `probe-failed` — a thing that went wrong, with
+     `down` named — instead of reading as a port nobody ever touched. */
   updateLock(plan, {
+    server: serverUrl(plan),
     serverPid: server.pid,
     serverCommand: serverCommand(plan),
     serverStartedAt: new Date().toISOString(),
   });
 
-  const answered = await waitFor(() => probe(serverUrl(plan)), (a) => a.reachable, 40_000);
+  const answered = await waitFor(() => probe(serverUrl(plan)), (a) => a.reachable, 40_000, () => unstarted);
+  if (unstarted) {
+    return fail(EXIT.failed, {
+      problem: `ft-server could not be started: ${unstarted.message}`,
+      because: [
+        `the binary this run expected is ${binary(plan)}`,
+        `it was spawned with the checkout as its working directory (${plan.checkout})`,
+        unstarted.code === "ENOENT"
+          ? "ENOENT means that path does not exist from there"
+          : `the system said ${unstarted.code ?? "nothing more"}`,
+      ],
+      instead: [
+        `cd ${plan.checkout} && cargo build -p ft-cli    build it`,
+        "control-firetower up --rebuild                 build it as part of coming up",
+        "control-firetower down                         clear the lock this attempt wrote",
+        "",
+        "If you passed --checkout, it is resolved to an absolute path before anything is",
+        "spawned, so this is about the binary rather than about the path.",
+      ],
+      detail: { cause: "server-unstarted", binary: binary(plan), code: unstarted.code ?? null },
+    });
+  }
   if (!answered) {
     return fail(EXIT.failed, {
       problem: `ft-server started as pid ${server.pid} and never answered on ${serverUrl(plan)}`,
@@ -387,7 +442,7 @@ export async function up(plan, flags) {
       ["control plane", serverUrl(plan)],
       ["administrator", `admin  ${dim("must_change_password is set: every other authenticated route answers 403")}`],
       ["organisation", dim("unnamed, so /bootstrap has no serverId and the desktop draws the setup wizard")],
-      ["renderer", `not started. cd desktop && pnpm exec vite --port ${plan.renderer.value} --strictPort`],
+      ["renderer", await rendererLine(plan)],
       ["run lock", plan.lock],
     ]);
     say("");
@@ -481,7 +536,7 @@ export async function up(plan, flags) {
     ["organisation", pinned.organization ?? "-"],
     ["version", pinned.version ?? "-"],
     ["control plane", serverUrl(plan)],
-    ["renderer", `not started. cd desktop && pnpm exec vite --port ${plan.renderer.value} --strictPort`],
+    ["renderer", await rendererLine(plan)],
     ["run lock", plan.lock],
   ]);
   say("");
@@ -559,7 +614,28 @@ export async function reset(plan, flags) {
     });
   }
   const seen = await verdict(plan);
-  if (seen.verdict !== "mine" && seen.verdict !== "nothing-here") return refuse(seen);
+  /**
+   * `claimed` resets, and that is the phase `up --first-run` leaves behind.
+   *
+   * This used to accept `mine` and `nothing-here` only, so
+   * `reset --first-run` refused from the one phase it is most wanted in —
+   * `forced-password-change.md`'s first driving row is *"make an instance that
+   * has never been through this → `control-firetower reset --first-run`"*, and
+   * `up --first-run`'s own last line says `reset --first-run` makes another
+   * one. Neither was true: a sweep needing a second first-run instance had to
+   * `down` and `up` again, paying the whole start-up cost for it.
+   *
+   * **Allowing it does not weaken the guard on the destructive half.** What
+   * authorises stopping the server is not the verdict: it is `stopPid` below,
+   * which refuses unless `ps` agrees the recorded pid is running exactly the
+   * command line this run launched. That check is unchanged, and in `claimed`
+   * it is the *same* fact ownership already rests on — this run bound a silent
+   * port and its own child is still alive. The database being dropped is this
+   * run's own, in its own Compose project, named explicitly.
+   */
+  if (seen.verdict !== "mine" && seen.verdict !== "claimed" && seen.verdict !== "nothing-here") {
+    return refuse(seen);
+  }
 
   const statements = [
     `DROP DATABASE IF EXISTS firetower WITH (FORCE)`,
@@ -635,6 +711,23 @@ export async function reset(plan, flags) {
   });
   const again = await up({ ...plan }, { ...flags, rebuild: false });
   return again;
+}
+
+/**
+ * The renderer line, asked rather than asserted.
+ *
+ * This said `not started` unconditionally — including on a `reset`, which
+ * reaches this summary through `up` and does not touch the renderer at all.
+ * So a run with Vite happily serving was told its renderer was not started,
+ * three seconds after `doctor` had reported it answering. A line that states
+ * something checkable without checking it is the same class of defect as a
+ * stale citation.
+ */
+async function rendererLine(plan) {
+  if (await listening(plan.renderer.value)) {
+    return `answering on http://localhost:${plan.renderer.value}  ${dim("already running; nothing here starts or stops it")}`;
+  }
+  return `not started. cd ${path.join(plan.checkout, "desktop")} && pnpm exec vite --port ${plan.renderer.value} --strictPort`;
 }
 
 /**
@@ -951,12 +1044,23 @@ function whyUpRefused(seen, plan) {
   ];
 }
 
-async function waitFor(get, ok, ms) {
+/**
+ * Poll until something is true, or give up.
+ *
+ * `giveUp` is a second exit: a predicate asked each time round that means
+ * "stop waiting, this is never going to happen". `up` passes the spawn's own
+ * `error` event through it, so a binary that could not be started is reported
+ * in a second instead of after the full 40-second timeout for a server that
+ * started and stayed quiet. The two are different failures and the operator
+ * is told which.
+ */
+async function waitFor(get, ok, ms, giveUp = () => false) {
   const until = Date.now() + ms;
   for (;;) {
+    if (giveUp()) return null;
     const answer = await get();
     if (ok(answer)) return answer;
-    if (Date.now() > until) return null;
+    if (Date.now() > until || giveUp()) return null;
     await new Promise((r) => setTimeout(r, 250));
   }
 }

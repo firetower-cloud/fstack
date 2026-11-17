@@ -11,6 +11,8 @@
  * it is written for a reader who has never seen Firetower and will read it
  * once.
  */
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { parse } from "./lib/args.mjs";
 import { isolationKey, findCheckout, plan as makePlan } from "./lib/key.mjs";
 import { configure, emit, fail, say, table, dim, EXIT } from "./lib/out.mjs";
@@ -74,7 +76,50 @@ if (flags.help) {
    be a reason not to run it. `--touched` does need the checkout, because
    reachability is a property of the import graph rather than of a filename —
    and with no graph to walk, every path reads as outside. */
-const checkout = flags.checkout ?? findCheckout(process.cwd());
+
+/**
+ * The checkout, as an absolute path, whatever was typed.
+ *
+ * **`--checkout ../../../firetower` used to crash with a raw Node stack
+ * trace.** The path went into the plan as written, `existsSync` resolved it
+ * against the working directory and found the binary, and then `spawn` was
+ * given the same relative path with `cwd` set to the checkout — so the
+ * binary was looked for at `<checkout>/../../../firetower/target/debug/...`
+ * and the `ENOENT` arrived as an unhandled `error` event. The lock recorded
+ * the relative path too, so every later command inherited a path that meant
+ * something different depending on where it was run from.
+ *
+ * Since this bundle lives in a different repository from the one it drives,
+ * `--checkout` is the normal way to use it and a relative one is the obvious
+ * thing to type. So it is resolved here, once, before anything derives
+ * anything from it — and checked for being a Firetower checkout at all,
+ * which an explicitly given path never was.
+ */
+const checkout = resolveCheckout(flags.checkout) ?? findCheckout(process.cwd());
+
+function resolveCheckout(given) {
+  if (!given) return null;
+  const at = path.resolve(process.cwd(), given);
+  if (existsSync(path.join(at, "crates", "ft-server", "Cargo.toml"))) return at;
+  process.exit(
+    fail(EXIT.usage, {
+      problem: `--checkout ${given} is not a Firetower checkout`,
+      because: [
+        `resolved to ${at}`,
+        "a Firetower checkout has crates/ft-server/Cargo.toml in it, and that is not there",
+        ...(given === at ? [] : [`relative paths are resolved against ${process.cwd()}`]),
+      ],
+      instead: [
+        "control-firetower --checkout /absolute/path/to/firetower doctor",
+        "",
+        "Refusing here rather than later: this path is spawned as a binary, used as a",
+        "working directory and written into the run lock, and a path that means something",
+        "different depending on where it was read from is worse than no path.",
+      ],
+      detail: { cause: "no-checkout", given, resolved: at },
+    }),
+  );
+}
 
 if (command === "limits") process.exit(await limits(positional.slice(1), flags, repeated, checkout));
 
@@ -200,7 +245,12 @@ async function api(plan, argv, flags) {
     );
   }
   say("");
-  say(`  ${dim(`${method} ${result.url}`)}  ${result.status}  ${dim(`serverId ${instance.recorded}`)}`);
+  /* `claimed` has no serverId to print — the organisation has not been named
+     — so it says what it is owned by instead of printing "serverId null". */
+  const whose = instance.recorded
+    ? `serverId ${instance.recorded}`
+    : "claimed by this run; no serverId until setup finishes";
+  say(`  ${dim(`${method} ${result.url}`)}  ${result.status}  ${dim(whose)}`);
   say("");
   console.log(flags.raw ? result.body : JSON.stringify(result.body, null, 2));
   say("");
@@ -216,7 +266,22 @@ async function api(plan, argv, flags) {
  */
 async function limits(argv, flags, repeated, checkout) {
   const target = flags.target ?? "frontend";
-  const touched = repeated.touched ?? [];
+  /**
+   * `--touched a,b,c` is three paths, and it used to be one.
+   *
+   * A comma list is the obvious thing to type and it was taken as a single
+   * filename, which does not exist, which read as OUTSIDE — so the command
+   * whose entire job is to refuse carefully gave the right answer for the
+   * wrong reason, and would have gone on doing so if one of the three had
+   * been native. Repeating the flag was the working form and neither was
+   * documented. Both work now.
+   */
+  const touched = (repeated.touched ?? []).flatMap((value) =>
+    String(value)
+      .split(",")
+      .map((one) => one.trim())
+      .filter(Boolean),
+  );
 
   if (touched.length) {
     const results = checkTouched(touched, checkout);

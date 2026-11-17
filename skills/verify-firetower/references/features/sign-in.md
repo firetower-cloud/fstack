@@ -22,9 +22,18 @@ that was set by somebody else lands somewhere else again — that is
 
 ## How to get to it (user POV)
 
-Type an address on the first screen and press `Continue`. From inside the
-app, the same form is reached by signing out under the avatar, or by
-connecting a second Firetower from the switcher.
+Type an address on the first screen and press `Continue`. **That is the one
+this recipe drives**, and it is the production first-run journey rather than
+a test hook.
+
+Two other ways reach the same form and **neither is driven here**, so take
+them as where to look rather than as verified handles:
+
+- signing out under the avatar
+- connecting a second Firetower from the switcher
+
+Naming a path and not driving it is an incomplete proof if the naming reads
+like a claim, which is why they are called out rather than listed flat.
 
 ## Driving it with control-firetower
 

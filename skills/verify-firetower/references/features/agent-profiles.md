@@ -5,10 +5,21 @@ worker". The screen lists the profiles this Firetower has, says plainly that
 every workspace can run without one, and offers to make one in two ways:
 describe it and have an agent write it, or fill in the form by hand. A draft
 opens under its own name, which starts as `New profile` and becomes whatever
-is typed. It answers to three words, all of them current: the route is
-`/configuration/roles`, the rail panel calls the pane **Profiles**, and the
-screen's own heading is **Agent profiles** — which is the one this map
-drives, because it is the one on screen.
+is typed. It answers to three words, all of them current, and they belong to
+three different surfaces:
+
+| where | word | |
+|---|---|---|
+| the route, and the API | `roles` | `/configuration/roles` |
+| the rail panel | **Agent profiles** | `desktop/src/ui/RailPanel.tsx:497` |
+| the screen's own heading | **Agent profiles** | `desktop/src/ui/config/Roles.tsx:283` |
+| the configuration index | **Profiles** | `desktop/src/ui/config/panes.ts:50` |
+
+**Agent profiles** is the one this map drives, because it is the one on
+screen and the one in the rail. **Profiles** is the configuration index's
+word — a surface this recipe never drives, so do not expect it in a capture.
+This file used to attribute `Profiles` to the rail panel, which contradicted
+its own `How to get to it` two paragraphs below.
 
 ## Sub-features
 
@@ -22,9 +33,15 @@ drives, because it is the one on screen.
 ## How to get to it (user POV)
 
 `Customize` in the destinations rail, then `Agent profiles` in the panel
-beside it — driven, and visible in the capture: the panel is headed
-`Customize` and carries `Skills`, `Agent profiles` and `Agents`. Customize
-itself lands on Skills.
+beside it. Customize itself lands on Skills.
+
+**What the capture actually shows**: the panel, headed `Customize` and
+carrying `Skills`, `Agent profiles` and `Agents`. This file used to say that
+path was "driven, and visible in the capture", which overstated it — the
+panel being *present* is proved, and pressing `Agent profiles` to navigate is
+not.
+
+**Driven by route** (`#/configuration/roles`), not by pressing the rail: the rail's presence is in the snapshot, that pressing it navigates is not proved here.
 
 ## Driving it with control-firetower
 
@@ -39,7 +56,12 @@ empty state is part of what this verifies — and nothing here needs a machine.
 | Read the library back | `control-firetower api GET /roles` | still empty — the draft is not saved until it is saved, which is the right answer and worth showing |
 
 Proof: the empty screen, the menu, and the draft, with the `/roles` readback
-confirming nothing was created by opening a form.
+confirming nothing was created by opening a form. **All four are in the
+capture**: the menu is photographed alongside the draft because the gesture
+asserts it, and the readback is embedded rather than left for the operator to
+run by hand. Both of those used to be promised here and missing — a gesture's
+`expect` photographed nothing, and only the first-run journeys embedded a
+readback.
 
 ## Gotchas
 

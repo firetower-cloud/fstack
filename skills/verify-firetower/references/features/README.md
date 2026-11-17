@@ -9,22 +9,51 @@ Every file has the same four sections, in the same order — `Sub-features`,
 `How to get to it (user POV)`, `Driving it with control-firetower`,
 `Gotchas` — and the `Driving it` section always opens with `Preconditions:`.
 
+### `How to get to it` names paths. It does not claim to have driven them
+
+**`drive open` navigates by route, every time.** It goes to
+`#/configuration/machines`; it does not press `Machines` in the rail. So
+where a file names a rail button or a configuration-index pane as the way in,
+that is **where a person would look, not a handle this bundle has verified**.
+The snapshots prove the rail is on screen and carry its buttons' names; that
+pressing one navigates is not proved by anything here.
+
+Naming a path and leaving the reader to assume it was driven is an incomplete
+proof, so each file says which of its ways in is the driven one.
+`this-firetower.md` is the model: *"the menu path to it — under the avatar,
+then Settings — is not driven here, so take it as where to look rather than
+as a verified handle."*
+
 ## The one rule
 
 **A handle is only in this map once it has been driven against the running
 application.** Not read out of a harness, not grepped out of the source,
 not inferred from a component's props. Driven.
 
-The reason is in the checkout rather than in theory. `desktop/scripts/states.mjs`
-drives `/^Connect$/` against the **mock** server; `desktop/e2e/cursor-live.mjs`
-drives a real one and still clicks `Connect` where the address screen renders
-`Continue`. The two disagree with each other, and neither had been run against
-the app recently. Selectors inherited from either are candidates, not facts.
+The reason is a measurement. The first version of this vocabulary was
+assembled by reading the repository — two harnesses for the gestures and the
+sign-in sequence, the components themselves for the screens. 28 handles, every
+one sourced from a file. Then they were driven, and **6 of the 28 were
+wrong**: a button read as `Connect` that the app renders as `Continue`, two
+gestures describing a dialog this build does not have, two routes that are not
+the screen their name suggests, and a screen whose heading is not its route's
+word. Not stale by a release — wrong about the application that was running
+when they were read out of it.
 
-`control-firetower drive audit` is how that stays true: it drives every
-handle this bundle ships and names the ones that no longer match, with the
-file and line each was copied from. Run it after any UI change, and run it
-before believing this map.
+So a selector that was read is a candidate, and a selector that was driven is
+a fact. `lib/vocabulary.mjs` holds that measurement entry by entry, and the
+six wrong ones each carry what driving found instead.
+
+Two commands keep it true, and they check different things:
+
+- `control-firetower drive audit` drives every handle this bundle ships and
+  names the ones that no longer match. Run it after any UI change, and run it
+  before believing this map.
+- `node --test test/citations.test.mjs` re-reads every `file:line` this bundle
+  cites in the checkout and fails when the cited line no longer says what is
+  claimed. The handles were audited from the first day and the citations were
+  not, and a false citation is how this map's own justification came to be
+  wrong in print.
 
 Anything that could not be driven is either absent from these files or marked
 unverified with the reason it could not be. **An unverified selector is worse
@@ -38,20 +67,30 @@ Every recipe in this directory starts from here and says only what it adds.
    pointed at it with `--checkout <path>`.
 2. **`npm install`** once, in the skill directory, and Google Chrome on the
    machine.
-3. **This run's own stack**, from `control-firetower up` — Postgres, an
+3. **`pnpm install` in `<checkout>/desktop`**, once per checkout. The
+   renderer at step 5 is the checkout's own Vite, and a fresh checkout has no
+   `desktop/node_modules` — `pnpm exec vite` fails outright without this, and
+   it is a separate dependency tree from the one at step 2. This is the step
+   that was missing from this list.
+4. **This run's own stack**, from `control-firetower up` — Postgres, an
    `ft-server --dev`, an administrator whose forced password change has been
    cleared, and a named organisation. Ports, Compose project, `FIRETOWER_HOME`
    and scratch root are all derived from `$FIRETOWER_SESSION`, and none of
    them can come out as `4400`, `5433` or `5273`.
-4. **The renderer**, which `up` does not start because its port is a flag
+5. **The renderer**, which `up` does not start because its port is a flag
    only:
    `cd <checkout>/desktop && pnpm exec vite --port <renderer port> --strictPort`.
    `pnpm dev -- --port N` does not work — pnpm swallows the flag and Vite
    binds its hardcoded 5273.
-5. **`control-firetower doctor` green.** `up` does not grade itself, and a
+6. **`control-firetower doctor` green.** `up` does not grade itself, and a
    server that answers is not the same as a control plane that can be used.
+   On a `--first-run` instance "green" means something different and `doctor`
+   says which: the `instance` line reads *claimed by this run* rather than
+   naming a `serverId`, because there is no `serverId` until the organisation
+   is named. That is the correct reading of a first-run instance, not a
+   failure — and `doctor` exits 0 on it.
 
-Two of the ten features need an instance that is **not** at step 3:
+Two of the ten features need an instance that is **not** at step 4:
 
 - `first-run-connect.md` runs against either.
 - `forced-password-change.md` and `setup-wizard.md` need
@@ -133,7 +172,9 @@ back further than that.
   it covers the first-run screens *and* the app's own, because the journeys
   open the gates on the way through.
 - When one fails, update the handle **and** its origin comment together. A
-  copy whose origin is stale is worse than no copy — the two harnesses in the
-  checkout are what that looks like after nobody runs them for a while.
+  copy whose origin is stale is worse than no copy, because the origin is what
+  the next reader checks instead of the application.
+- `node --test test/citations.test.mjs` re-reads every `file:line` this bundle
+  cites. It needs a checkout and says so rather than passing without one.
 - `control-firetower limits --touched <path>` before writing the word
   verified. A Chrome run proves the React app and almost nothing below it.

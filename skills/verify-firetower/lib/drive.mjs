@@ -92,7 +92,7 @@ function listStates(flags) {
       firstRun: FIRST_RUN,
       offstage: OFFSTAGE,
       notWhatTheySay: NOT_WHAT_THEY_SAY,
-      provenance: "copied from desktop/scripts/states.mjs and desktop/e2e/cursor-live.mjs; each entry carries its origin",
+      provenance: "read from the checkout and then driven: 6 of the first 28 handles were wrong and are corrected or gone (see INHERITED). Each entry carries its origin, and test/citations.test.mjs re-reads every one",
     });
   }
   say("");
@@ -113,7 +113,7 @@ function listStates(flags) {
   say(`  ${dim("routes that are not the screen their name suggests")}`);
   table(NOT_WHAT_THEY_SAY.map((r) => [r.path, `lands on ${r.lands} — ${r.note}`]));
   say("");
-  say(`  ${dim("sign-in")} copied from desktop/e2e/cursor-live.mjs:28-34, which drives a real server`);
+  say(`  ${dim("sign-in")} ${dim("each handle cites the component that renders it; re-read by test/citations.test.mjs")}`);
   table(Object.entries(SIGNIN).map(([name, s]) => [name, `${describeHandle(s)}  ${dim(s.from)}`]));
   say("");
   say(`  ${dim("gates — asserted absent; verified once against an unprepared instance")}`);
@@ -349,13 +349,19 @@ function mayDrive(plan, seen, journey) {
  */
 export function ownsEndpoint(plan, at, ps = dockerPs) {
   const parsed = /^(?:([^@\s]+)@)?(\[[0-9a-fA-F:]+\]|[^:\s]+):(\d{1,5})$/.exec(String(at ?? "").trim());
+  /* `given` is carried on every failure path, not just the success one. The
+     refusal used to print `null is not an ssh endpoint this run started`,
+     because only the ok branch set `at` — so the one line naming the thing
+     being refused named nothing. */
+  const given = String(at ?? "").trim() || null;
   if (!parsed) {
-    return { ok: false, why: `--at has to be user@host:port, and it was ${JSON.stringify(at ?? null)}` };
+    return { ok: false, given, why: `--at has to be user@host:port, and it was ${JSON.stringify(at ?? null)}` };
   }
   const [, , host, port] = parsed;
   if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(host)) {
     return {
       ok: false,
+      given,
       why: `${host} is not loopback, and this run can only positively establish that it started something on its own machine`,
     };
   }
@@ -363,16 +369,102 @@ export function ownsEndpoint(plan, at, ps = dockerPs) {
   try {
     rows = ps(plan);
   } catch (error) {
-    return { ok: false, why: `docker ps could not be read (${error.message}), so nothing can be established` };
+    return { ok: false, given, why: `docker ps could not be read (${error.message}), so nothing can be established` };
   }
   const found = rows.split("\n").find((row) => row.includes(`:${port}->`));
   if (!found) {
     return {
       ok: false,
+      given,
       why: `no running container labelled com.firetower.session=${plan.session ?? plan.key} publishes port ${port}`,
     };
   }
   return { ok: true, container: found.split("\t")[0], at: String(at).trim() };
+}
+
+/**
+ * What the application is saying on screen, in its own words.
+ *
+ * Asked at the moment driving failed, so a refusal can quote the app instead
+ * of guessing. Three sources, in the order they are trustworthy:
+ *
+ *   alert / status   the roles an application uses to say something went
+ *                    wrong. If one is on screen it is the answer
+ *   the known shapes the app's precondition sentences follow a pattern —
+ *                    "... is not connected yet", "Add one under ...",
+ *                    "then try again" — and matching them finds the message
+ *                    even where it is drawn as ordinary text
+ *
+ * Returns the lines, or an empty array. An empty array means the page had
+ * nothing to say, which is the case where a drifted handle really is the
+ * likeliest explanation.
+ */
+const EXPLAINS = /(?:is|are) not connected yet|no machine is connected|Add one under|then try again|needs? a machine|connect (?:a|your) /i;
+
+async function spoken(page) {
+  const found = [];
+  try {
+    for (const role of ["alert", "status"]) {
+      for (const text of await page.getByRole(role).allInnerTexts()) {
+        const line = text.replace(/\s+/g, " ").trim();
+        if (line) found.push(line);
+      }
+    }
+  } catch {
+    /* the page may be mid-navigation; the text sweep below still runs */
+  }
+  if (!found.length) {
+    try {
+      const body = (await page.locator("body").innerText()).split("\n");
+      for (const raw of body) {
+        const line = raw.replace(/\s+/g, " ").trim();
+        if (line.length > 20 && line.length < 300 && EXPLAINS.test(line)) found.push(line);
+      }
+    } catch {
+      /* nothing to read */
+    }
+  }
+  return [...new Set(found)].slice(0, 6);
+}
+
+/**
+ * Console noise, named rather than guessed at.
+ *
+ * Every capture of this application carries a 404 for `/favicon.ico` — the
+ * dev server does not serve one — and a webfont that does not load is the
+ * same kind of nothing. Those are the only two classes written off here, and
+ * they are written off by matching what they are rather than by a threshold,
+ * because "probably unimportant" applied to a list of errors is how the React
+ * nesting warnings in the machines row went unreported.
+ *
+ * Anything else is the application talking, and `drive` prints it.
+ */
+const NOISE = [
+  { what: "favicon 404", pattern: /favicon\.ico/i },
+  { what: "webfont 404", pattern: /\.(?:woff2?|ttf|otf|eot)\b/i },
+];
+
+function isNoise(line) {
+  return NOISE.some(({ pattern }) => pattern.test(line));
+}
+
+function noiseKind(line) {
+  return NOISE.find(({ pattern }) => pattern.test(line))?.what ?? "other";
+}
+
+/** Wrap a console line so a long React warning stays readable in a terminal. */
+function wrapLine(text, width) {
+  const out = [];
+  let line = "";
+  for (const word of String(text).split(/\s+/)) {
+    if (line && (line + word).length > width) {
+      out.push(line.trimEnd());
+      line = "";
+    }
+    line += `${word} `;
+  }
+  if (line.trim()) out.push(line.trimEnd());
+  return out.slice(0, 6);
 }
 
 const dockerPs = (plan) =>
@@ -384,7 +476,7 @@ const dockerPs = (plan) =>
 
 function refusedEndpoint(plan, gesture, endpoint) {
   return fail(EXIT.notMine, {
-    problem: `${gesture} presses \`Add it\`, and ${JSON.stringify(endpoint.at ?? null)} is not an ssh endpoint this run started`,
+    problem: `${gesture} presses \`Add it\`, and ${endpoint.at ?? endpoint.given ?? "no --at address"} is not an ssh endpoint this run started`,
     because: [
       endpoint.why,
       "`Add it` makes the control plane open an ssh connection to whatever is in the field, so the address is an action",
@@ -464,9 +556,9 @@ async function captureWith(chromium, plan, { state, gesture, signinOnly }, flags
   const started = Date.now();
   /* Two different things, kept apart because they mean different things. An
      uncaught exception means the page is broken and the capture is not
-     evidence of anything — cursor-live.mjs asserts on exactly this and
-     nothing else. A console error is worth recording and reading; a 404 for
-     a font is not a reason to fail a run. */
+     evidence of anything, so it fails the run. A console error is worth
+     recording and surfacing but not worth failing on by itself: a 404 for a
+     font is not a reason to throw a capture away. */
   const thrown = [];
   const logged = [];
   const offstageDone = [];
@@ -478,7 +570,16 @@ async function captureWith(chromium, plan, { state, gesture, signinOnly }, flags
     const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: SCALE });
     page.on("pageerror", (error) => thrown.push(String(error.message ?? error)));
     page.on("console", (message) => {
-      if (message.type() === "error") logged.push(message.text());
+      if (message.type() !== "error") return;
+      /* **The URL, because the message alone does not carry it.** A failed
+         request logs `Failed to load resource: the server responded with a
+         status of 404 (Not Found)` and nothing else — unreadable as evidence,
+         and unclassifiable: the favicon 404 every capture of this app carries
+         is indistinguishable from a 404 that matters until you know which
+         resource it was. `location().url` is where Chrome keeps it. */
+      const text = message.text();
+      const where = message.location()?.url;
+      logged.push(where && !text.includes(where) ? `${text} — ${where}` : text);
     });
 
     let at = Date.now();
@@ -518,9 +619,9 @@ async function captureWith(chromium, plan, { state, gesture, signinOnly }, flags
       await page.waitForTimeout(1500);
       done("signed in", Date.now() - at);
 
-      /* The two gates cursor-live.mjs does not handle. `up` cleared both over
-         the API; this asserts it rather than assuming it, because either one on
-         screen means the capture is of the door and not of the feature. */
+      /* The two first-run gates. `up` cleared both over the API; this asserts
+         it rather than assuming it, because either one on screen means the
+         capture is of the door and not of the feature. */
       for (const gate of GATES) {
         if (await present(page, gate.landmark)) {
           await page.screenshot({ path: path.join(plan.evidence, `${name}-gate.png`) });
@@ -548,7 +649,16 @@ async function captureWith(chromium, plan, { state, gesture, signinOnly }, flags
         step(3, 3, `${gesture}: ${chosen.does}`);
         at = Date.now();
         for (const action of chosen.steps) {
-          const outcome = await perform(page, action, values, { plan, page });
+          /* **The same context a journey gets**, so a gesture's `expect`
+             photographs the state it asserts. This used to be
+             `{ plan, page }`: the `alongside` sink was missing, so every
+             `expect` in every gesture asserted its state and photographed
+             nothing. `start-a-new-profile`'s Proof line promises "the empty
+             screen, the menu, and the draft" and the menu — the one thing
+             driving that gesture establishes, and the thing its Gotcha is
+             about — was in no capture at all. It was being asserted and
+             thrown away. */
+          const outcome = await perform(page, action, values, { plan, page, alongside, evidence: plan.evidence, name });
           if (!outcome.ok) throw new Error(outcome.why);
         }
         if (chosen.then && !(await present(page, resolve(chosen.then, values)))) {
@@ -563,12 +673,25 @@ async function captureWith(chromium, plan, { state, gesture, signinOnly }, flags
     const snapshotText = await ariaSnapshot(page);
     const snapshot = path.join(plan.evidence, `${name}.aria.txt`);
 
-    const command = `control-firetower drive ${gesture ? `act ${gesture}` : `open ${where}`}${flags.at ? ` --at ${flags.at}` : ""}${flags.remote ? ` --remote ${flags.remote}` : ""}${flags.as ? ` --as ${flags.as}` : ""}`;
+    /* **The command that was run, not one that would reach a similar screen.**
+       `drive signin` used to record itself as `drive open home --as sign-in`,
+       and re-running what the proof names does not sign in through the
+       screens — it signs in and then navigates, which is a different claim.
+       A proof names the action that produced it or it is not traceable. */
+    const command = `control-firetower drive ${
+      signinOnly ? "signin" : gesture ? `act ${gesture}` : `open ${where}`
+    }${flags.at ? ` --at ${flags.at}` : ""}${flags.remote ? ` --remote ${flags.remote}` : ""}${flags.as ? ` --as ${flags.as}` : ""}${flags.feature ? ` --feature ${flags.feature}` : ""}`;
     /* The side effect, read from somewhere other than the screen that claimed
        it — and for the first-run journeys, the record of what the journey
        changed about this run: the password it replaced, the organisation it
        named, the serverId that only exists once it has been. */
     const after = journey ? await settle(plan, gesture, journey, values, offstageDone) : null;
+    /* The same readback for a state or a gesture. A gesture's own comes
+       first: `paste-a-remote` proves itself with /repos, and the screen it
+       happens to be on proves itself with something else. */
+    const observed = journey
+      ? after?.readback
+      : await readbackOf(plan, chosen?.readback ?? STATES[where]?.readback);
     /* Sanitised BEFORE anything is written down. `ariaSnapshot()` contains
        the value of an `<input type="password">` — measured, with the locked
        playwright — and this run has just typed its administrator password
@@ -588,12 +711,16 @@ async function captureWith(chromium, plan, { state, gesture, signinOnly }, flags
         snapshotText: snapshotText.slice(0, 20_000),
         pageErrors: thrown,
         consoleErrors: logged,
+        /* The application's own errors, deduplicated and with the known noise
+           taken out, so the posted comment leads with the ones that are
+           findings rather than filling its five slots with favicon 404s. */
+        consoleFindings: [...new Set(logged)].filter((line) => !isNoise(line)),
         transport: "frontend",
         serverId: seen.recorded ?? after?.serverId ?? null,
         title: await page.title(),
         url: page.url(),
         ...(alongside.length ? { alongside } : {}),
-        ...(after?.readback ? { readback: after.readback } : {}),
+        ...(observed ? { readback: observed } : {}),
         ...(after?.offstage?.length ? { offstage: after.offstage } : {}),
         ms: Date.now() - started,
       },
@@ -619,9 +746,30 @@ async function captureWith(chromium, plan, { state, gesture, signinOnly }, flags
        that these copies can drift, so the error has to name the copy, name
        where it came from, and say how to check it. */
     const failing = path.join(plan.evidence, `${name}-drift.png`);
+    /**
+     * **What the application says about it, before this blames a handle.**
+     *
+     * The screenshot saved here is where the real reason usually is, in
+     * words, in red. A missing `Add it` on the repositories screen was
+     * reported as a drifted selector while that same picture carried *"No
+     * machine is connected yet, and a repository is read by a machine. Add
+     * one under Compute, then try again."* — so the advice was to diff a
+     * handle that was perfect, and following it means filing a bug against a
+     * healthy application.
+     *
+     * So the page is asked for its own explanation first. Anything the app
+     * renders as an alert or a status is quoted in the refusal, and the
+     * verdict is softened from "the handle drifted" to "one of these two",
+     * because from here the tool genuinely cannot tell which and saying so is
+     * the honest answer.
+     */
+    let said = [];
     try {
       const open = browser.contexts()[0]?.pages()[0];
-      if (open) await open.screenshot({ path: failing });
+      if (open) {
+        await open.screenshot({ path: failing });
+        said = await spoken(open);
+      }
     } catch {
       /* the page may be gone; the message below still stands */
     }
@@ -641,27 +789,56 @@ async function captureWith(chromium, plan, { state, gesture, signinOnly }, flags
     const stale = /locator|Timeout|waiting for/i.test(String(error.message));
     return fail(EXIT.failed, {
       problem: stale
-        ? "a handle in the copied selector vocabulary no longer matches the app"
+        ? said.length
+          ? "something the recipe expected was not on screen, and the app says why"
+          : "a handle in the copied selector vocabulary no longer matches the app"
         : `driving failed: ${error.message}`,
       because: [
         String(error.message).split("\n").slice(0, 3).join(" "),
-        "",
-        "lib/vocabulary.mjs holds COPIES of the selectors, because the bundle is",
-        "self-contained and cannot import them. Each entry records the file and line it",
-        "came from, and this is what that is for.",
+        ...(said.length
+          ? [
+              "",
+              "THE APPLICATION SAID THIS, on the screenshot below:",
+              ...said.slice(0, 4).map((line) => `  "${line}"`),
+              "",
+              "Read that before touching a handle. Two different things look identical from",
+              "here — a selector that has drifted, and a precondition this instance does not",
+              "meet — and the app's own words are what tell them apart.",
+            ]
+          : [
+              "",
+              "lib/vocabulary.mjs holds COPIES of the selectors, because the bundle is",
+              "self-contained and cannot import them. Each entry records the file and line it",
+              "came from, and this is what that is for.",
+            ]),
       ],
       instead: [
-        "control-firetower drive states          every handle, with its origin",
         `open ${failing}                        what was actually on screen`,
-        "",
-        "Then diff the copy against the checkout and update BOTH the handle and its",
-        "origin comment. A copy whose origin is stale is worse than no copy.",
+        ...(said.length
+          ? [
+              "",
+              "If what it said is a missing precondition, this entry's `needs` does not cover",
+              "it yet: that is a gap in lib/drive.mjs's NEEDS table rather than in the handle.",
+              "control-firetower drive states          what each entry declares it needs",
+            ]
+          : [
+              "control-firetower drive states          every handle, with its origin",
+              "",
+              "Then diff the copy against the checkout and update BOTH the handle and its",
+              "origin comment. A copy whose origin is stale is worse than no copy.",
+            ]),
       ],
-      detail: { state: where, gesture: gesture ?? null, screenshot: failing },
+      detail: { state: where, gesture: gesture ?? null, screenshot: failing, appSaid: said },
     });
   } finally {
     if (!flags["keep-browser"] && browser.isConnected()) await browser.close();
   }
+
+  /* Deduplicated, because React logs the same warning once per render and
+     eight copies of one defect is still one defect. */
+  const distinct = [...new Set(logged)];
+  const ignored = distinct.filter(isNoise);
+  const noticed = distinct.filter((line) => !isNoise(line));
 
   say("");
   table([
@@ -670,12 +847,42 @@ async function captureWith(chromium, plan, { state, gesture, signinOnly }, flags
     ["action", result.command],
     ["screenshot", result.screenshot],
     ["snapshot", `${result.snapshot}  ${dim("a screenshot verifies layout and never a value")}`],
-    ["page errors", thrown.length ? `${thrown.length}: ${thrown[0]}` : `0  ${dim(`${logged.length} console error(s) recorded, which do not fail a run`)}`],
+    ["page errors", thrown.length ? `${thrown.length}: ${thrown[0]}` : `0  ${dim(noticed.length ? `${logged.length} console error(s) recorded — ${noticed.length} worth reading, below` : `${logged.length} console error(s) recorded, all known noise`)}`],
     ["sanitised", redacted.length ? redacted.join("; ") : dim("nothing in the captured text matched a secret this run knows about")],
     ["published as captured", `${path.basename(result.screenshot)}  ${dim("PNG bytes cannot be redacted — capture synthetic data only")}`],
     ["feature", result.feature ?? dim("none given — --feature <id> makes a proof traceable")],
   ]);
-  say("");
+  /**
+   * **The console errors, said out loud.**
+   *
+   * They were counted and stored and never shown, so `3 console error(s) …
+   * which do not fail a run` was the whole of what a QA agent saw. Driving
+   * the machines row logs two React `<button> cannot contain a nested
+   * <button>` errors — a real defect in the application, captured by this
+   * tool, reported by it as a number. A finding the instrument has in its
+   * hand and does not say is worse than one it never collected, because the
+   * count reads as reassurance.
+   *
+   * They still do not fail the run: a font 404 is not a reason to throw a
+   * capture away. So they are printed as findings to report, with the noise
+   * separated from the rest rather than everything being averaged into one
+   * number.
+   */
+  if (noticed.length) {
+    say(`  ${warn()} ${noticed.length} console error(s) worth reporting. They do not fail this run:`);
+    for (const line of noticed.slice(0, 8)) {
+      for (const wrapped of wrapLine(line, 74)) say(`      ${wrapped}`);
+    }
+    if (noticed.length > 8) say(`      ${dim(`… and ${noticed.length - 8} more, all in the capture's consoleErrors`)}`);
+    say("");
+    say(`      ${dim("These are the application's own, not this tool's. If one is a defect, it is a")}`);
+    say(`      ${dim("finding for the product — file it against firetower rather than against the map.")}`);
+    say("");
+  }
+  if (ignored.length) {
+    say(`  ${dim(`${ignored.length} console error(s) ignored as known noise: ${[...new Set(ignored.map(noiseKind))].join(", ")}`)}`);
+    say("");
+  }
   say(`  ${dim("this is not proof yet")} control-firetower evidence post --pr <number>`);
   say("");
   if (thrown.length) {
@@ -698,12 +905,11 @@ async function captureWith(chromium, plan, { state, gesture, signinOnly }, flags
 /**
  * Walk the whole vocabulary against the running app and say what still matches.
  *
- * This exists because of what was found building it: **the two harnesses in
- * the firetower checkout disagree with each other, and neither has been
- * checked against the real application recently.**
- * `desktop/scripts/states.mjs:484,492` drives `/^Connect$/` against the mock
- * server; `desktop/e2e/cursor-live.mjs` is stale against a real one. So
- * "copy the vocabulary from states.mjs" cannot mean "trust it".
+ * This exists because of what was found building it: **the first 28 handles
+ * were assembled by reading the repository, and 6 of them were wrong.** Not
+ * stale by a release — wrong about the build that was running when they were
+ * read. `INHERITED` in `lib/vocabulary.mjs` records all 28 and what driving
+ * found. So "copy the vocabulary" cannot mean "trust it".
  *
  * A selector list that has never been driven is exactly the rot a feature map
  * exists to prevent, and a CLI with confident wrong selectors is worse than
@@ -952,10 +1158,10 @@ async function audit(plan, flags) {
       "Update lib/vocabulary.mjs: the handle AND the origin comment, together.",
       "A copy whose origin is stale is worse than no copy.",
       "",
-      "Do not assume the checkout's harnesses are right. They disagree with each other:",
-      "states.mjs drives /^Connect$/ against the mock server and cursor-live.mjs is stale",
-      "against a real one. The running app is the source of truth, and this command is",
-      "how you ask it.",
+      "Do not assume a harness in the checkout is right. 6 of the 28 handles this",
+      "vocabulary started from were read out of one and were wrong about the build that",
+      "was running at the time. The running app is the source of truth, and this command",
+      "is how you ask it.",
     ],
   });
 }
@@ -1119,15 +1325,43 @@ async function settle(plan, id, journey, values, offstage = []) {
     out.serverId = found.serverId;
   }
 
-  if (journey.readback) {
-    const route = journey.readback.how.replace(/^GET\s+/, "");
-    const saw =
-      route === "/bootstrap"
-        ? { serverId: found.serverId, organization: found.organization, version: found.version }
-        : (await raw(plan, "GET", route, { token: readLock(plan).run?.token })).body;
-    out.readback = { how: journey.readback.how, shows: journey.readback.shows, saw };
-  }
+  out.readback = await readbackOf(plan, journey.readback, found);
   return out;
+}
+
+/**
+ * One readback, performed and recorded on the capture.
+ *
+ * **This used to run for the three first-run journeys and nothing else.**
+ * Entries 4 to 10 each name a readback as part of their proof —
+ * `/auth/me`, `/trackers`, `/skills`, `/roles`, `/bootstrap`, `/hosts`,
+ * `/repos` — and not one of them reached the posted comment, so the operator
+ * had to run `api` separately and paste the answer in by hand, which nothing
+ * in the bundle supported. A proof the bundle asks for and cannot produce is
+ * a gap in the bundle rather than a step for the reader.
+ *
+ * So any state or gesture may declare `readback`, in the same shape a
+ * journey does, and it is read from a *second view* rather than from the
+ * screen that claimed it — which is the property that makes it worth having.
+ */
+async function readbackOf(plan, spec, found = null) {
+  if (!spec) return null;
+  const route = spec.how.replace(/^GET\s+/, "");
+  /* `/bootstrap` is unauthenticated and the probe has already asked it. */
+  if (route === "/bootstrap") {
+    const boot = found ?? (await probe(serverUrl(plan)));
+    return {
+      how: spec.how,
+      shows: spec.shows,
+      saw: { serverId: boot.serverId, organization: boot.organization, version: boot.version },
+    };
+  }
+  const answer = await raw(plan, "GET", route, { token: readLock(plan).run?.token });
+  return {
+    how: spec.how,
+    shows: spec.shows,
+    saw: answer.status === 200 ? answer.body : { status: answer.status, body: answer.body },
+  };
 }
 
 /** A journey that did not get where it was going, reported as what it is. */
@@ -1268,10 +1502,41 @@ async function needsBareRepos(plan, flags) {
  */
 async function needsRemote(plan, flags) {
   if (!flags.remote) return "needs --remote <path or URL the machine can clone>";
-  const repos = await raw(plan, "GET", "/repos", { token: readLock(plan).run?.token });
+  const token = readLock(plan).run?.token;
+  const repos = await raw(plan, "GET", "/repos", { token });
   if (repos.status !== 200) return `GET /repos answered ${repos.status}, so whether this screen is bare cannot be established`;
   if (!Array.isArray(repos.body) || repos.body.length === 0) {
     return "this install has no repository yet, so the screen is bare and draws no host picker — seed one first";
+  }
+  /**
+   * **A machine, because a repository is read by one.**
+   *
+   * This is the precondition that was missing, and its absence was reported
+   * as selector drift: with an empty fleet the gesture ran, `Add it` never
+   * appeared, and the failure said *button named "Add it" is not on screen*
+   * and advised diffing the handle against the checkout. The handle was
+   * perfect. The app had already said the real reason in red —
+   * *"No machine is connected yet, and a repository is read by a machine"* —
+   * on the drift screenshot this tool saved. Following that advice produces a
+   * false bug report against a healthy application, which is the exact
+   * failure the feature map exists to prevent, inverted.
+   *
+   * `crates/ft-server/src/api/repos.rs:634-647` is why: the probe behind
+   * `Add it` is answered by a host, and with none it returns `no_machine`.
+   * With nothing found the button reads `Save it anyway`
+   * (`desktop/src/ui/config/Repos.tsx:849`), so the post-condition this
+   * gesture asserts can never appear. The README's sweep order says the same
+   * thing — 9 before 10 — and this is that fact, checked.
+   */
+  const hosts = await raw(plan, "GET", "/hosts", { token });
+  if (hosts.status !== 200) return `GET /hosts answered ${hosts.status}, so whether a machine can answer the probe cannot be established`;
+  if (!Array.isArray(hosts.body) || hosts.body.length === 0) {
+    return (
+      "this install has no machine, and the probe behind `Add it` is answered by a machine rather " +
+      "than by the control plane (api/repos.rs:634-647). With an empty fleet the app says so in red " +
+      "and the button reads `Save it anyway`, so `Add it` never appears. Add a machine first — " +
+      "add-a-machine.md, which is entry 9 to this entry's 10"
+    );
   }
   return null;
 }

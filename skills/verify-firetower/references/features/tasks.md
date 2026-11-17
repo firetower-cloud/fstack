@@ -25,6 +25,8 @@ noticing.
 index also lists `Trackers` under **Work**, which is where the button here
 goes.
 
+**Driven by route** (`#/tasks`), not by pressing the rail: the rail's presence is in the snapshot, that pressing it navigates is not proved here.
+
 ## Driving it with control-firetower
 
 **Preconditions:** the baseline in `README.md`, and **no tracker connected**,

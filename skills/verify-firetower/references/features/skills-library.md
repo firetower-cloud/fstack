@@ -27,6 +27,8 @@ or by dropping a folder anywhere on the page.
 destination opens. The panel beside it lists `Skills`, `Agent profiles` and
 `Agents`, and the skills themselves appear under `Your skills` in that panel.
 
+**Driven by route** (`#/configuration/skills`), not by pressing the rail: the rail's presence is in the snapshot, that pressing it navigates is not proved here.
+
 ## Driving it with control-firetower
 
 **Preconditions:** the baseline in `README.md`. A fresh install already has

@@ -185,10 +185,52 @@ test("the comment says what the capture found, not something stronger", () => {
   const body = text.slice(text.indexOf("function body("), text.indexOf("async function post("));
   assert.ok(!/Page errors during this capture/.test(body), "the mislabel is gone");
   assert.match(body, /Uncaught page errors: \$\{capture\.pageErrors\?\.length \?\? 0\}/);
-  assert.match(body, /Console errors, which do not fail a run/);
+  /* Still a console error rather than a page error, and still said not to
+     fail a run — the distinction this test was written for. */
+  assert.match(body, /Console errors from the application/);
+  assert.match(body, /do not fail a run/);
   /* And the two counts come from the two different arrays. */
   const uncaught = body.indexOf("Uncaught page errors");
-  const console_ = body.indexOf("Console errors, which do not fail a run");
+  const console_ = body.indexOf("Console errors from the application");
   assert.ok(body.slice(uncaught, console_).includes("capture.pageErrors"));
-  assert.ok(body.slice(console_).includes("capture.consoleErrors"));
+  assert.ok(body.slice(console_ - 400).includes("capture.consoleFindings"));
+});
+
+/**
+ * The console errors are listed, not just counted.
+ *
+ * QA's reading of a posted comment was that console errors are "counted and
+ * stored but never surfaced as findings", and the terminal said only
+ * `3 console error(s) … which do not fail a run`. Driving the machines row
+ * logs two React `<button> cannot contain a nested <button>` errors: a real
+ * defect, collected by this tool and reported as a number. A count reads as
+ * reassurance, so the lines themselves have to be in the comment.
+ */
+test("the posted comment lists the application's console errors", () => {
+  const text = readFileSync(new URL("../lib/evidence.mjs", import.meta.url), "utf8");
+  const body = text.slice(text.indexOf("function body("), text.indexOf("async function post("));
+  assert.match(body, /findings\.slice\(0, 5\)/, "the lines are printed, not only counted");
+  assert.match(body, /consoleFindings/, "and the noise-free list is what is printed");
+});
+
+/**
+ * Anything published goes through the scrub, including the field added for
+ * those findings. The spread in `sanitiseCapture` would otherwise carry it
+ * out unredacted, which is the one channel that file exists to close.
+ */
+test("consoleFindings is sanitised like every other published channel", async () => {
+  const { sanitiseCapture } = await import("../lib/redact.mjs");
+  const secret = "verify-aSecretNobodyShouldSee";
+  const { capture, removed } = sanitiseCapture(
+    {
+      snapshotText: "nothing here",
+      consoleErrors: [`failed with ${secret}`],
+      consoleFindings: [`failed with ${secret}`],
+      pageErrors: [],
+    },
+    [{ what: "the administrator password", value: secret }],
+  );
+  assert.ok(!JSON.stringify(capture).includes(secret), "the secret survived into the sanitised capture");
+  assert.ok(!capture.consoleFindings[0].includes(secret));
+  assert.ok(removed.includes("the administrator password"));
 });

@@ -185,7 +185,18 @@ function body(plan, captures, held) {
       lines.push("");
     }
     if (capture.readback) {
-      lines.push(`Read back from a second view: \`${capture.readback.how}\` -> \`${JSON.stringify(capture.readback.saw).slice(0, 400)}\``);
+      /* **`saw` is already a string by the time it gets here.**
+         `sanitiseCapture` scrubs the readback by stringifying it and
+         replacing secrets in the text, so it hands back JSON-as-a-string —
+         and stringifying that again published
+         `"\"{\\\"needsPassword\\\":false}\""`, which is the readback the
+         whole proof turns on, rendered unreadable. Stringify only what is not
+         already text. */
+      const saw =
+        typeof capture.readback.saw === "string"
+          ? capture.readback.saw
+          : JSON.stringify(capture.readback.saw);
+      lines.push(`Read back from a second view: \`${capture.readback.how}\` -> \`${String(saw).slice(0, 400)}\``);
       lines.push("");
     }
     /* A step of the journey this transport did not drive, published as
@@ -208,10 +219,26 @@ function body(plan, captures, held) {
       for (const e of capture.pageErrors.slice(0, 5)) lines.push(`- \`${e.slice(0, 200)}\``);
       lines.push("");
     }
-    if (capture.consoleErrors?.length) {
-      lines.push(`Console errors, which do not fail a run: ${capture.consoleErrors.length}`);
+    /* The application's own console errors, listed rather than counted. A
+       count reads as reassurance: driving the machines row logs two React
+       `<button> cannot contain a nested <button>` errors, and a comment
+       saying "3 console errors, which do not fail a run" is how a reader
+       comes away without them. `consoleFindings` has the known noise taken
+       out, so the five slots here go to the ones worth reading. */
+    const findings = capture.consoleFindings ?? capture.consoleErrors ?? [];
+    if (findings.length) {
+      lines.push(
+        `**Console errors from the application: ${findings.length}.** They do not fail a run, ` +
+          "and they are findings for the product rather than for this map:",
+      );
       lines.push("");
-      for (const e of capture.consoleErrors.slice(0, 5)) lines.push(`- \`${e.slice(0, 200)}\``);
+      for (const e of findings.slice(0, 5)) lines.push(`- \`${e.slice(0, 200)}\``);
+      if (findings.length > 5) lines.push(`- …and ${findings.length - 5} more`);
+      lines.push("");
+    }
+    const noise = (capture.consoleErrors?.length ?? 0) - findings.length;
+    if (noise > 0) {
+      lines.push(`${noise} further console error(s) were the dev server's own noise (a favicon or a webfont 404).`);
       lines.push("");
     }
   }

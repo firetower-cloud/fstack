@@ -48,11 +48,18 @@ never carries a value — and the `/bootstrap` readback beside it.
 
 ## Gotchas
 
-- **The button is `Continue`, not `Connect`.** `desktop/e2e/cursor-live.mjs`
-  still clicks `Connect` and times out after 30s. The word `Connect` is alive
-  elsewhere in the app — connecting a git host, connecting a tracker,
-  connecting an account — so a global substitution is its own bug. Match this
-  one on the address screen only.
+- **Every capture carries one console 404, for `/favicon.ico`.** The Vite
+  renderer does not serve one. It is not a finding and it is not this run's
+  doing; `drive` classifies it as known noise and says how many it set aside,
+  so anything it *does* print is the application talking.
+- **The button is `Continue`, not `Connect`** —
+  `desktop/src/ui/Connect.tsx:224`. This handle was read as `Connect` and
+  driving it is what settled the question; it is one of the six in `INHERITED`
+  that reading got wrong. The word `Connect` is alive elsewhere in the app —
+  connecting a git host, connecting a tracker, connecting an account, and
+  `desktop/scripts/states.mjs:484` presses the git-hosts one correctly — so a
+  global substitution is its own bug. Match this one on the address screen
+  only.
 - **Before the setup wizard has run, there is no organisation to show.** The
   card reads **`A Firetower`** with a monogram taken from the address, because
   `/bootstrap` answers `organization: null` until the organisation is named.

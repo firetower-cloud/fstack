@@ -32,18 +32,29 @@ landmark called `Destinations` and this is one of its buttons. It lands on
 falls through to. (The rail's keyboard shortcuts are in the source and are
 not driven here.)
 
+**Driven by route** (`#/configuration/repositories`), not by pressing the rail: the rail's presence is in the snapshot, that pressing it navigates is not proved here.
+
 ## Driving it with control-firetower
 
-**Preconditions:** the baseline in `README.md`, plus two things this feature
-cannot supply itself:
+**Preconditions:** the baseline in `README.md`, plus three things this
+feature cannot supply itself:
 
 - **A machine.** The probe behind `Add it` is answered by a machine, not by
-  the control plane, so a remote cannot be checked before `add-a-machine.md`
-  has run. Measured 2026-11-17: with an empty fleet the probe refuses.
+  the control plane (`crates/ft-server/src/api/repos.rs:634-647`), so a
+  remote cannot be checked before `add-a-machine.md` has run. Measured
+  2026-11-17: with an empty fleet the probe refuses. `drive` now checks this
+  before driving and names it — it used to run anyway and report the missing
+  `Add it` as a drifted selector.
 - **At least one repository already imported.** The control holding
   `Paste a remote` is not drawn while the screen is bare, and bare means no
   repository *and* no connected host. Seed one over the API — the precondition
   is seeded, the journey is driven.
+- **A bare git repository on the machine, at the path `--remote` names.**
+  `git init --bare /home/editor/web.git` inside the container from
+  `add-a-machine.md` is enough. The probe asks the *machine* to reach that
+  path, so a remote nothing can clone fails the probe — and the button then
+  reads `Save it anyway` rather than `Add it`. This was only hinted at in a
+  Gotcha before, and it has to be created by hand.
 
 | User action | Command | Observable result |
 |---|---|---|

@@ -33,6 +33,8 @@ under **Compute**. Both land on `/configuration/machines`. The `Add a machine`
 button is beside the heading once there is a fleet, and inside the empty state
 before that.
 
+**Driven by route** (`#/configuration/machines`), not by pressing the rail: the rail's presence is in the snapshot, that pressing it navigates is not proved here.
+
 ## Driving it with control-firetower
 
 **Preconditions:** the baseline in `README.md`, plus an ssh endpoint this run

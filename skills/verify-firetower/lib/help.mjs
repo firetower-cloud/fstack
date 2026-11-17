@@ -112,6 +112,12 @@ EXIT CODES
                             not tear down a project it has no record of
                             starting
        probe-failed         the recorded server stopped answering
+       endpoint-not-mine    an ssh address was given to drive that 'docker ps'
+                            does not show as a container this run started.
+                            'Add it' makes the control plane open an ssh
+                            connection to whatever is typed, so the address is
+                            an action and ownership of it is asserted the same
+                            way as everything else here
   3  the transport cannot support the claim you are making
   4  a precondition is missing; nothing is up, or nothing is recorded
   5  doing that would destroy evidence that has not been posted
@@ -204,7 +210,7 @@ export const COMMANDS = {
     5  login          POST /api/v1/auth/login, and the token into the run lock
     6  setup          POST /setup/organization and /setup/complete, or the
                       desktop shows the setup wizard instead of the app
-                      (desktop/src/ui/Gate.tsx:47)
+                      (desktop/src/ui/Gate.tsx:46)
 
   Then /bootstrap finally has a serverId, and 'up' records it. That recorded
   id is what every later command checks before it touches anything.
@@ -414,19 +420,20 @@ OPTIONS
   --json              the capture manifest as data
 
 THE SELECTOR VOCABULARY IS COPIED, VERIFIED, NOT TRUSTED
-  Every handle is copied from desktop/scripts/states.mjs or
-  desktop/e2e/cursor-live.mjs with a comment saying which line it came from —
-  the bundle is self-contained, so it cannot import them, and the comment is
-  what makes a drift traceable.
+  Every handle carries the source it came from. The bundle is self-contained
+  so it cannot import the checkout's harnesses, and the citation is what makes
+  a drift traceable.
 
-  But a copy is a starting list, not a source of truth. The two harnesses in
-  the checkout DISAGREE WITH EACH OTHER: states.mjs drives /^Connect$/
-  against the mock server while cursor-live.mjs is stale against a real one,
-  and neither had been checked against the application recently. So every
-  handle this ships was driven against a real build before it shipped, and
-  anything that could not be reached is marked rather than assumed.
-  'drive audit' is how that stays true. A CLI with confident wrong selectors
-  is worse than no CLI, because its failures look like application bugs.
+  But a copy that was read is a starting list, not a source of truth. THE
+  FIRST 28 HANDLES WERE ASSEMBLED BY READING THE REPOSITORY AND 6 OF THEM
+  WERE WRONG -- wrong about the build that was running when they were read,
+  not stale by a release. So every handle this ships was driven against a real
+  build before it shipped, and anything that could not be reached is marked
+  rather than assumed. 'drive audit' is how that stays true, and
+  'node --test test/citations.test.mjs' re-reads every file:line this bundle
+  cites, which is the half that was missing. A CLI with confident wrong
+  selectors is worse than no CLI, because its failures look like application
+  bugs.
 
 WHAT A PASSING RUN HERE DOES NOT MEAN
   See 'control-firetower limits'. Every member of bridge.ts differs between a
@@ -636,7 +643,14 @@ OPTIONS
                    'shell' is the WebdriverIO run in CI, which this binary
                    reads evidence from and cannot launch. 'any' is the list
                    nothing automated proves
-  --touched <path> repeatable, repository-relative. Exit 3 if a Chrome run
+  --touched <path> repeatable OR comma-separated, and both are documented
+                   because both work:
+                     --touched a.ts --touched b.ts
+                     --touched a.ts,b.ts
+                   A comma list used to be read as one filename, which does
+                   not exist, which read as OUTSIDE — the right answer for the
+                   wrong reason, and wrong the moment one of the paths was
+                   native. Repository-relative. Exit 3 if a Chrome run
                    cannot support a claim about it, with the import chain
                    that makes it so. NEEDS THE CHECKOUT, because the graph is
                    read from it: with no checkout every path under
