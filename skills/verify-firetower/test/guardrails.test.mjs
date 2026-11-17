@@ -158,3 +158,44 @@ test("the cannot-prove table keeps the two rows that make a passing run misleadi
   }
   assert.ok(nothingProves().length >= 12);
 });
+
+test("nothing ships in the vocabulary without an origin and a verification date", async () => {
+  /* The rot this is about: the firetower checkout holds two harnesses that
+     disagree with each other, and neither had been driven against the app
+     recently. A handle with no recorded origin cannot be diffed when it
+     breaks, and one with no recorded verification was never driven at all. */
+  const { STATES, GESTURES, GATES, SIGNIN, NOT_WHAT_THEY_SAY } = await import("../lib/vocabulary.mjs");
+
+  for (const [name, state] of Object.entries(STATES)) {
+    assert.ok(state.from?.length > 5, `state ${name} has no origin`);
+    assert.ok(state.verified, `state ${name} has never been driven`);
+    assert.ok(state.landmark?.role, `state ${name} has no landmark to assert`);
+  }
+  for (const [name, gesture] of Object.entries(GESTURES)) {
+    assert.ok(gesture.from?.length > 5, `gesture ${name} has no origin`);
+    assert.ok(gesture.verified, `gesture ${name} has never been driven`);
+    assert.ok(gesture.then, `gesture ${name} has no post-condition, so "it worked" is undefined`);
+  }
+  for (const gate of GATES) {
+    assert.ok(gate.verified, `gate ${gate.name} has never been driven`);
+    assert.ok(gate.landmark?.role);
+  }
+  for (const [name, handle] of Object.entries(SIGNIN)) {
+    assert.ok(handle.from?.length > 5, `signin ${name} has no origin`);
+  }
+  /* And the states the build does not reach are recorded rather than aliased
+     onto whatever they land on — states.mjs:11-13. */
+  assert.ok(NOT_WHAT_THEY_SAY.length >= 2);
+  for (const route of NOT_WHAT_THEY_SAY) {
+    assert.ok(route.lands && route.found && route.note);
+    assert.ok(!Object.values(STATES).some((s) => s.path === route.path), `${route.path} is both a state and a known-wrong route`);
+  }
+});
+
+test("no gesture presses a button that probes somebody else's network", () => {
+  /* states.mjs:118-120 presses `Add it|Reaching it` after typing an address,
+     because the mock server answers it. Against a real control plane that is
+     an ssh probe to 10.4.0.22, which is somebody's network. */
+  const text = readFileSync(path.join(here, "lib/vocabulary.mjs"), "utf8");
+  assert.ok(!/click:\s*button\("Add it"/.test(text), "Add it is a post-condition here, never a step");
+});
