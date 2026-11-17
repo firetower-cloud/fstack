@@ -82,7 +82,7 @@ test("every path QA found the denylist calling safe is now outside", () => {
       "desktop/src/api/download.ts",
       /* calls loadArtifact — "NO, AND THE REASON IS THE POINT" */
       "desktop/src/ui/ArtifactTab.tsx",
-      /* shoot and canShoot, both hardcoded no-ops in Chrome */
+      /* shoot and canShoot, hardcoded null and false in Chrome */
       "desktop/src/artifacts/posters.tsx",
       /* imports the denylisted drag.ts; its own name is on no list */
       "desktop/src/ui/Titlebar.tsx",

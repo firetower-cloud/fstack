@@ -200,9 +200,10 @@ function body(plan, captures, held) {
   }
   lines.push("### What this does not prove");
   lines.push("");
-  lines.push("A Chrome run proves the React app and nothing below `desktop/src/bridge.ts`:");
-  lines.push("eleven of its twelve members are no-ops here, and `save` and `loadArtifact` are");
-  lines.push("*different gestures* rather than absent ones, so a passing run looks like evidence.");
+  lines.push("A Chrome run proves the React app and nothing below `desktop/src/bridge.ts`.");
+  lines.push("That file exists to hold a browser implementation apart from a native one, so every");
+  lines.push("member of it differs between the two: most are unavailable here, and `save` differs by");
+  lines.push("running anyway, which is worse — the run passes and looks like evidence.");
   lines.push("`open.ts`, `drag.ts`, `update.ts` and `telemetry.ts` reach Tauri past the bridge,");
   lines.push("as do `ui/Resize.tsx`, the Windows tray and the HTML5 drop path. Run");
   lines.push("`control-firetower limits --touched <path>` before writing \"verified\".");

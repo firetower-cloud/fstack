@@ -147,8 +147,9 @@ test("the cannot-prove table keeps the two rows that make a passing run misleadi
   assert.match(save.chrome, /MISLEADINGLY/);
   assert.match(artifact.chrome, /THE REASON IS THE POINT/);
   assert.equal(BRIDGE.length, 12, "bridge.ts has twelve members");
-  /* Eleven of the twelve read as absent in Chrome. `save` is the twelfth and
-     is the dangerous one: it is a different gesture, not a missing one. */
+  /* The split, asserted over the table rather than restated in prose: eleven
+     of the twelve rows answer "no" in the chrome column, and the twelfth is
+     `save`, which answers "partly" — the dangerous one, because it runs. */
   assert.equal(BRIDGE.filter((row) => /^no/i.test(row.chrome)).length, 11);
   assert.equal(BRIDGE.filter((row) => /^partly/i.test(row.chrome)).length, 1);
   /* And bridge.ts is not the whole native surface. */

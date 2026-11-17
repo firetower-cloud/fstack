@@ -289,7 +289,8 @@ async function limits(argv, flags, repeated, checkout) {
   say(`  ${dim("what this transport cannot prove")}  target ${target}`);
   say("");
   if (target === "frontend" || target === "any") {
-    say(`  ${dim("desktop/src/bridge.ts — twelve members, eleven no-ops in Chrome")}`);
+    const unavailable = BRIDGE.filter((row) => /^no\b/i.test(row.chrome)).length;
+    say(`  ${dim(`desktop/src/bridge.ts — ${BRIDGE.length} members, ${unavailable} unavailable in Chrome and the rest differing by running anyway`)}`);
     table(BRIDGE.map((row) => [row.capability, `${row.chrome}`]));
     say("");
     say(`  ${dim("past the bridge — bridge.ts claims to be the whole differing surface; it is not")}`);

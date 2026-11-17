@@ -164,11 +164,12 @@ THE THREE PHASES OF A RUN
             wedge. 'reset' needs a running stack and names 'up' here
 
 WHAT THIS CANNOT PROVE
-  A Chrome run proves the React app and almost nothing below it: 11 of the 12
-  members of desktop/src/bridge.ts are no-ops in a browser, and two of them —
-  save and loadArtifact — are *different gestures* rather than absent ones, so
-  a passing Chrome run looks like evidence. Run 'control-firetower limits'
-  before writing the word "verified" anywhere.
+  A Chrome run proves the React app and almost nothing below it.
+  desktop/src/bridge.ts exists to hold a browser implementation apart from a
+  native one, so every member of it differs between the two. Most are simply
+  unavailable here; the dangerous one is save, which differs by *running*
+  anyway, so a passing Chrome run looks like evidence. Run
+  'control-firetower limits' before writing the word "verified" anywhere.
 
   'limits --touched <path>' is an ALLOWLIST with a closed default. A path is
   inside what a Chrome run proves only where that can be positively
@@ -379,8 +380,8 @@ THE SELECTOR VOCABULARY IS COPIED, VERIFIED, NOT TRUSTED
   is worse than no CLI, because its failures look like application bugs.
 
 WHAT A PASSING RUN HERE DOES NOT MEAN
-  See 'control-firetower limits'. Eleven of bridge.ts's twelve members are
-  no-ops in Chrome, and two are different gestures rather than absent ones.
+  See 'control-firetower limits'. Every member of bridge.ts differs between a
+  browser and the native shell, and save differs by running anyway.
 `,
 
   evidence: `control-firetower evidence — capture, post to a pull request, verify, in that order
@@ -537,17 +538,19 @@ WHAT IT WILL NOT DO
   the transport you have can support that claim.
 
   The short version: a Chrome run proves the React app and nothing below
-  desktop/src/bridge.ts. Eleven of that file's twelve members are no-ops in a
-  browser. The other two, save and loadArtifact, are *different gestures*
-  rather than absent ones — which is worse than absent, because the run
-  passes and looks like evidence. And bridge.ts is not the whole native
-  surface: open.ts, drag.ts, update.ts and telemetry.ts reach Tauri directly
-  past it, plus ui/Resize.tsx, the Windows tray and the HTML5 drop path.
+  desktop/src/bridge.ts. That file exists to hold a browser implementation
+  apart from a native one, so every member of it differs between the two.
+  Most are unavailable here. save is the one that differs by *running* — the
+  browser branch fetches a blob and clicks an anchor — which is worse than
+  absent, because the run passes and looks like evidence. And bridge.ts is
+  not the whole native surface: open.ts, drag.ts, update.ts and telemetry.ts
+  reach Tauri directly past it, plus ui/Resize.tsx, the Windows tray and the
+  HTML5 drop path.
 
   '--touched' IS AN ALLOWLIST, WITH A CLOSED DEFAULT
   It used to be a list of twelve native filenames with everything else
-  permitted — which called desktop/src/api/download.ts (the only
-  bridge.save() call site), ui/ArtifactTab.tsx, artifacts/posters.tsx,
+  permitted — which called desktop/src/api/download.ts (which calls
+  bridge.save()), ui/ArtifactTab.tsx, artifacts/posters.tsx,
   ui/Titlebar.tsx (which *imports* the listed drag.ts), and all of crates/,
   migrations/, mobile/ and web/ provable from a browser. A list of what is
   forbidden with everything else allowed is the shape this whole command
