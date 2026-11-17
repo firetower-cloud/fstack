@@ -5,11 +5,10 @@ worker". The screen lists the profiles this Firetower has, says plainly that
 every workspace can run without one, and offers to make one in two ways:
 describe it and have an agent write it, or fill in the form by hand. A draft
 opens under its own name, which starts as `New profile` and becomes whatever
-is typed.
-
-The route is `/configuration/roles` and the screen's own heading is
-**Agent profiles**, while the rail panel calls the same pane **Profiles**.
-Three words, all current, and the map drives the one the screen shows.
+is typed. It answers to three words, all of them current: the route is
+`/configuration/roles`, the rail panel calls the pane **Profiles**, and the
+screen's own heading is **Agent profiles** — which is the one this map
+drives, because it is the one on screen.
 
 ## Sub-features
 

@@ -9,12 +9,10 @@ was typed — the probe — and the dialog turns into whatever it found. The
 ordinary answer on a bare machine is "connected, and there is no worker on
 it yet", with an offer to put one there over the same connection. Afterwards
 the machine's row carries its vCPU count, its memory and the worker's
-version, and the fleet stops being empty.
-
-This is the map's Tier B entry: the one whose subject *is* a machine, and the
-one that supplies the machine the repositories entry then borrows — the probe
-behind a pasted remote is answered by a machine rather than by the control
-plane.
+version, and the fleet stops being empty. This is the map's Tier B entry —
+the one whose subject *is* a machine, and the one that supplies the machine
+the repositories entry then borrows, since the probe behind a pasted remote
+is answered by a machine rather than by the control plane.
 
 ## Sub-features
 
