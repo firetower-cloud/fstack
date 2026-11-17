@@ -470,12 +470,14 @@ export async function down(plan, flags) {
   const unposted = (held.run?.evidence ?? []).filter((e) => !e.postedAt);
   if (unposted.length && !flags.force && !flags["dry-run"]) {
     return fail(EXIT.evidence, {
-      problem: `${unposted.length} capture${unposted.length === 1 ? "" : "s"} have not been posted, and tearing down loses the proof`,
+      problem: unposted.length === 1
+        ? "a capture has not been posted, and tearing down loses the proof"
+        : `${unposted.length} captures have not been posted, and tearing down loses the proof`,
       because: [
         "durability comes from having posted, not from a directory: the whole workspace is",
         "deleted when this session ends, and the stack a side effect would be read back from",
         "goes first.",
-        ...unposted.map((e) => `  ${e.name}  ${e.at}`),
+        ...unposted.map((e) => `  ${e.name}  ${e.screenshot ?? e.snapshot ?? "(no file recorded)"}`),
       ],
       instead: [
         "control-firetower evidence post --pr <number>     post it",

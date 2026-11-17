@@ -75,7 +75,7 @@ export async function evidence(plan, argv, flags) {
 function list(plan, captures) {
   const rows = captures.map((c) => [
     c.name,
-    `${c.postedAt ? tick() : warn()} ${c.feature ? `${c.feature}  ` : ""}${path.relative(plan.evidence, c.screenshot ?? c.at ?? "")}  ${dim(c.takenAt ?? "")}`,
+    `${c.postedAt ? tick() : warn()} ${c.feature ? `${c.feature}  ` : ""}${c.screenshot ? path.basename(c.screenshot) : "(no file)"}  ${dim(c.takenAt ?? "")}`,
   ]);
   say("");
   table(["Captured", ...(rows.length ? rows : [["none", `nothing in ${plan.evidence}`]])]);
@@ -172,10 +172,15 @@ async function post(plan, captures, flags) {
   const held = readLock(plan).run;
   const text = body(plan, unposted, held);
   const file = path.join(plan.evidence, "comment.md");
+  /* The attachment path has to be written the way the body writes it, or gh
+     does not rewrite the reference — it uploads the asset and APPENDS it
+     instead, leaving the body pointing at a local path that renders as a
+     broken image. Measured on the first real post. So: run gh from the
+     evidence directory and name both sides `./<file>`. */
   const attachments = unposted
     .filter((c) => c.screenshot && existsSync(c.screenshot))
-    .map((c) => `${c.screenshot}#${c.name}`);
-  const args = ["pr", "comment", String(flags.pr), "--body-file", file];
+    .map((c) => `./${path.basename(c.screenshot)}#${c.name}`);
+  const args = ["pr", "comment", String(flags.pr), "--body-file", path.basename(file)];
   if (flags.repo) args.splice(3, 0, "--repo", flags.repo);
   for (const attachment of attachments) args.push("--attach", attachment);
 
@@ -186,7 +191,7 @@ async function post(plan, captures, flags) {
     say("");
     table([
       "Would run",
-      ["gh", `gh ${args.join(" ")}`],
+      ["gh", `gh ${args.join(" ")}  ${dim(`(from ${plan.evidence})`)}`],
       ["body", `${file}  ${dim(`${text.length} bytes, written so you can read it`)}`],
       ["attach", attachments.length ? attachments.map((a) => path.basename(a)).join(", ") : "none"],
     ]);
@@ -199,7 +204,7 @@ async function post(plan, captures, flags) {
   writeFileSync(file, text);
   let stdout;
   try {
-    ({ stdout } = await run("gh", args, { maxBuffer: 1 << 24 }));
+    ({ stdout } = await run("gh", args, { cwd: plan.evidence, maxBuffer: 1 << 24 }));
   } catch (error) {
     return fail(EXIT.failed, {
       problem: "gh did not post the comment, so nothing is durable yet",
@@ -273,14 +278,10 @@ async function verify(plan, captures, flags) {
 
   const images = [...String(comment.body).matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)].map((m) => m[1]);
   const local = images.filter((u) => !/^https?:\/\//.test(u));
+  const token = await ghToken();
   const resolved = [];
   for (const url of images.filter((u) => /^https?:\/\//.test(u))) {
-    try {
-      const response = await fetch(url, { method: "HEAD", redirect: "follow", signal: AbortSignal.timeout(10_000) });
-      resolved.push({ url, status: response.status, ok: response.ok });
-    } catch (error) {
-      resolved.push({ url, status: null, ok: false, why: error.message });
-    }
+    resolved.push(await reaches(url, token));
   }
 
   const broken = resolved.filter((r) => !r.ok);
@@ -289,7 +290,7 @@ async function verify(plan, captures, flags) {
     "Comment",
     ["url", last.comment],
     ["images", `${images.length} referenced, ${resolved.length} absolute, ${local.length} still local`],
-    ...resolved.map((r) => [r.ok ? "resolves" : "BROKEN", `${r.status ?? r.why} ${r.url.slice(0, 80)}`, r.ok ? tick() : cross()]),
+    ...resolved.map((r) => [r.ok ? "resolves" : "BROKEN", `${r.ok ? `${r.status} ${r.type}` : r.why}  ${r.url.slice(0, 72)}`, r.ok ? tick() : cross()]),
   ]);
   say("");
 
@@ -341,6 +342,60 @@ function hold(plan, captures) {
   say("      about that path. Unposted evidence is the failure state, not a to-do.");
   say("");
   return emit({ held: unposted.map((c) => c.name), where: plan.evidence }, unposted.length ? EXIT.evidence : EXIT.ok);
+}
+
+/**
+ * Does this attachment actually resolve to bytes?
+ *
+ * Two hops, and following them automatically does not work. A
+ * `user-attachments/assets/<id>` URL answers 302 to a *signed* S3 URL — which
+ * it does even anonymously — and S3 then rejects the request if the
+ * Authorization header is carried along with the signature, which is where
+ * the 403 came from the first time this was run. So: ask GitHub with the
+ * token and do not follow, then ask S3 for one byte with no credentials at
+ * all.
+ *
+ * "Could not confirm" is reported as broken rather than as a pass, because
+ * the whole point of this step is that a reviewer can see the picture.
+ */
+async function reaches(url, token) {
+  try {
+    const hop = await fetch(url, {
+      method: "GET",
+      redirect: "manual",
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+      signal: AbortSignal.timeout(15_000),
+    });
+    const location = hop.headers.get("location");
+    if (!location) {
+      return { url, status: hop.status, ok: hop.ok, why: hop.ok ? null : `HTTP ${hop.status} and no redirect${token ? "" : ", and there was no gh token to ask with"}` };
+    }
+    const asset = await fetch(location, {
+      method: "GET",
+      headers: { range: "bytes=0-0" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    const type = asset.headers.get("content-type") ?? "";
+    const ok = asset.ok && /^(image|video)\//.test(type);
+    return {
+      url,
+      status: asset.status,
+      ok,
+      type,
+      why: ok ? null : `the asset answered ${asset.status} ${type || "with no content type"}`,
+    };
+  } catch (error) {
+    return { url, status: null, ok: false, why: `could not be reached: ${error.message}` };
+  }
+}
+
+async function ghToken() {
+  try {
+    const { stdout } = await run("gh", ["auth", "token"]);
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 async function originRepo(plan) {
