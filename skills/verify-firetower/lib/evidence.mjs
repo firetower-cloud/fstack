@@ -29,9 +29,59 @@ import { promisify } from "node:util";
 import { writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { readLock, updateLock } from "./own.mjs";
+import { runSecrets, sanitiseCapture } from "./redact.mjs";
 import { EXIT, emit, fail, say, table, dim, tick, cross, warn } from "./out.mjs";
 
 const run = promisify(execFile);
+
+/**
+ * The one place a GitHub attachment lives, and the only kind of URL this file
+ * will ever put a credential on.
+ *
+ * `verify` used to regex every Markdown image out of the comment body and
+ * send `Authorization: Bearer <the operator's gh token>` to each one,
+ * whatever its host. The comment body contains a fenced accessibility
+ * snapshot of the driven application, and the regex matched inside fences —
+ * so any attacker-controlled text that reached a captured UI label was enough
+ * to make the next `evidence verify` hand a real GitHub credential to a host
+ * of the attacker's choosing. Confirmed by the security review against
+ * `attacker.invalid`.
+ *
+ * The credential is genuinely needed: an unauthenticated HEAD cannot read a
+ * private repository's attachment, which is why it was added. So it is kept,
+ * and the *destination* is what gets decided here instead of by the page:
+ *
+ *   - exactly `https://github.com`, compared as an origin rather than matched
+ *     as a prefix, so `https://github.com.attacker.invalid` is not it
+ *   - exactly `/user-attachments/assets/<uuid>`, which is the shape every
+ *     `gh --attach` upload resolves to
+ *   - no query, no fragment, no userinfo
+ *
+ * And the URL that is checked comes from the manifest `post` recorded, never
+ * from the comment text. The body is only ever asked whether it *contains*
+ * the recorded URL.
+ */
+const ATTACHMENT_ORIGIN = "https://github.com";
+const ATTACHMENT_PATH = /^\/user-attachments\/assets\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export function approvedAttachment(candidate) {
+  let url;
+  try {
+    url = new URL(candidate);
+  } catch {
+    return { ok: false, why: `${candidate} is not a URL` };
+  }
+  if (url.origin !== ATTACHMENT_ORIGIN) {
+    return { ok: false, why: `origin is ${url.origin}, and the only approved origin is ${ATTACHMENT_ORIGIN}` };
+  }
+  if (!ATTACHMENT_PATH.test(url.pathname)) {
+    return { ok: false, why: `path is ${url.pathname}, which is not /user-attachments/assets/<uuid>` };
+  }
+  if (url.search || url.hash || url.username || url.password) {
+    return { ok: false, why: `${candidate} carries a query, fragment or userinfo, and an attachment URL has none` };
+  }
+  return { ok: true, url: url.toString() };
+}
 
 /** Append a capture to the run lock. Called by `drive`. */
 export function record(plan, capture) {
@@ -47,8 +97,12 @@ export async function evidence(plan, argv, flags) {
   if (held.state === "unreadable") {
     return fail(EXIT.notMine, {
       problem: "the run lock cannot be read, so what has been captured is unknown",
-      because: [held.why],
+      because: [held.why, "a lock that will not parse is not an empty one"],
       instead: [`cat ${plan.lock}`, `ls -la ${plan.evidence}`],
+      /* --help promises the cause is in --json as error.cause, and this
+         refusal is one of the six. It was the only exit-2 path in this file
+         that did not carry it. */
+      detail: { cause: "unreadable-lock" },
     });
   }
   const captures = held.run?.evidence ?? [];
@@ -95,7 +149,6 @@ function body(plan, captures, held) {
     `| | |`,
     `|---|---|`,
     `| serverId | \`${held?.serverId ?? "?"}\` |`,
-    `| isolation key | \`${plan.key}\` |`,
     `| transport | frontend (playwright-core, Chrome, Vite renderer) |`,
     `| ft-server | \`--dev\`, which is the only mode the driven page's calls get past CORS |`,
     "",
@@ -127,8 +180,19 @@ function body(plan, captures, held) {
       lines.push(`Read back from a second view: \`${capture.readback.how}\` -> \`${JSON.stringify(capture.readback.saw).slice(0, 400)}\``);
       lines.push("");
     }
+    /* Two different things, and the comment used to call the second one the
+       first. An uncaught page error means the capture is not evidence of
+       anything — `drive` fails the run on one. A console error is worth
+       reading and does not fail a run; a 404 for a font is not a page error,
+       and publishing it as one overstates what the capture found. */
+    lines.push(`Uncaught page errors: ${capture.pageErrors?.length ?? 0}${capture.pageErrors?.length ? "" : " — the page threw nothing while being driven"}`);
+    lines.push("");
+    if (capture.pageErrors?.length) {
+      for (const e of capture.pageErrors.slice(0, 5)) lines.push(`- \`${e.slice(0, 200)}\``);
+      lines.push("");
+    }
     if (capture.consoleErrors?.length) {
-      lines.push(`Page errors during this capture: ${capture.consoleErrors.length}`);
+      lines.push(`Console errors, which do not fail a run: ${capture.consoleErrors.length}`);
       lines.push("");
       for (const e of capture.consoleErrors.slice(0, 5)) lines.push(`- \`${e.slice(0, 200)}\``);
       lines.push("");
@@ -142,6 +206,17 @@ function body(plan, captures, held) {
   lines.push("`open.ts`, `drag.ts`, `update.ts` and `telemetry.ts` reach Tauri past the bridge,");
   lines.push("as do `ui/Resize.tsx`, the Windows tray and the HTML5 drop path. Run");
   lines.push("`control-firetower limits --touched <path>` before writing \"verified\".");
+  lines.push("");
+  lines.push("### How this evidence was sanitised");
+  lines.push("");
+  lines.push("This comment is public. Before posting, `control-firetower` scrubbed this run's own");
+  lines.push("administrator password and bearer token out of the snapshot text, the readback and");
+  lines.push("the console lines, blanked the values of secret-named fields — Playwright's");
+  lines.push("accessibility snapshot *does* contain the value of an `<input type=\"password\">`,");
+  lines.push("measured, so masking on screen is not enough — and neutralised markdown in captured");
+  lines.push("text. **Screenshots cannot be sanitised**: PNG bytes are what the screen showed. The");
+  lines.push("control is that a run captures its own isolated stack with synthetic data, never a");
+  lines.push("populated real account.");
   lines.push("");
   return lines.join("\n");
 }
@@ -170,16 +245,24 @@ async function post(plan, captures, flags) {
   }
 
   const held = readLock(plan).run;
-  const text = body(plan, unposted, held);
+
+  /* The explicit sanitisation step, run over everything about to be
+     published, and reported rather than done quietly. `drive` already
+     sanitised at capture time so nothing unredacted was persisted; this is
+     the pass whose result the operator reads before the comment goes up. */
+  const secrets = runSecrets(held);
+  const cleaned = unposted.map((capture) => sanitiseCapture(capture, secrets));
+  const scrubbed = [...new Set(cleaned.flatMap((c) => c.removed))];
+  const publishing = cleaned.map((c) => c.capture);
+  const text = body(plan, publishing, held);
   const file = path.join(plan.evidence, "comment.md");
   /* The attachment path has to be written the way the body writes it, or gh
      does not rewrite the reference — it uploads the asset and APPENDS it
      instead, leaving the body pointing at a local path that renders as a
      broken image. Measured on the first real post. So: run gh from the
      evidence directory and name both sides `./<file>`. */
-  const attachments = unposted
-    .filter((c) => c.screenshot && existsSync(c.screenshot))
-    .map((c) => `./${path.basename(c.screenshot)}#${c.name}`);
+  const attached = publishing.filter((c) => c.screenshot && existsSync(c.screenshot));
+  const attachments = attached.map((c) => `./${path.basename(c.screenshot)}#${c.name}`);
   const args = ["pr", "comment", String(flags.pr), "--body-file", path.basename(file)];
   if (flags.repo) args.splice(3, 0, "--repo", flags.repo);
   for (const attachment of attachments) args.push("--attach", attachment);
@@ -196,9 +279,11 @@ async function post(plan, captures, flags) {
       ["attach", attachments.length ? attachments.map((a) => path.basename(a)).join(", ") : "none"],
     ]);
     say("");
+    table(["Sanitised", ...sanitationRows(cleaned, scrubbed)]);
+    say("");
     say(`  ${dim("then")} control-firetower evidence verify --pr ${flags.pr}`);
     say("");
-    return emit({ dryRun: true, gh: ["gh", ...args], bodyFile: file, attachments });
+    return emit({ dryRun: true, gh: ["gh", ...args], bodyFile: file, attachments, sanitised: scrubbed, images: cleaned.flatMap((c) => c.images) });
   }
 
   writeFileSync(file, text);
@@ -220,17 +305,51 @@ async function post(plan, captures, flags) {
   }
   const url = stdout.trim().split("\n").filter(Boolean).pop() ?? null;
   const postedAt = new Date().toISOString();
+  const sanitisedCaptures = new Map(publishing.map((c) => [c.name, c]));
   updateLock(plan, {
-    evidence: captures.map((c) => (unposted.includes(c) ? { ...c, postedAt, comment: url } : c)),
-    posted: [...(held?.posted ?? []), { at: postedAt, pr: flags.pr, comment: url, captures: unposted.map((c) => c.name) }],
+    evidence: captures.map((c) =>
+      unposted.includes(c) ? { ...(sanitisedCaptures.get(c.name) ?? c), postedAt, comment: url } : c,
+    ),
+    posted: [...(held?.posted ?? []), { at: postedAt, pr: flags.pr, comment: url, captures: unposted.map((c) => c.name), sanitised: scrubbed }],
   });
 
+  /* The manifest `verify` will use. Built here, once, from the comment GitHub
+     actually rendered — and every entry has to clear the approved origin and
+     path shape before it is written down. Nothing downstream of this point
+     ever derives a request target from comment text. */
+  const manifest = await recordAttachments(plan, { repo: flags.repo, comment: url, expected: attached });
+
   say("");
-  table(["Posted", ["comment", url ?? "(gh printed no URL)"], ["captures", unposted.map((c) => c.name).join(", ")]]);
+  table([
+    "Posted",
+    ["comment", url ?? "(gh printed no URL)"],
+    ["captures", unposted.map((c) => c.name).join(", ")],
+    ["attachments", manifest.ok ? `${manifest.attachments.length} recorded, each on ${ATTACHMENT_ORIGIN}` : manifest.why],
+  ]);
   say("");
+  table(["Sanitised", ...sanitationRows(cleaned, scrubbed)]);
+  say("");
+  if (!manifest.ok) {
+    return fail(EXIT.evidence, {
+      problem: "the comment is posted, but its attachments could not be recorded as this run's, so it is not verifiable",
+      because: [
+        manifest.why,
+        `an attachment is only recorded when it is on ${ATTACHMENT_ORIGIN} at /user-attachments/assets/<uuid> and its alt text is a capture this run attached`,
+        "verify will only ever check a URL recorded here — never one read back out of the comment body — so an unrecordable attachment stays unverified rather than being trusted",
+      ],
+      instead: [
+        `open ${url ?? "the comment"}                     look at what rendered`,
+        `control-firetower evidence post --pr ${flags.pr}    post again, which uploads the images again`,
+        "",
+        "Do not clean up. The captures are still the only copy:",
+        `  ${plan.evidence}`,
+      ],
+      detail: { cause: "attachment-unrecordable", comment: url },
+    });
+  }
   say(`  ${warn()} not yet verified. ${dim(`control-firetower evidence verify --pr ${flags.pr}`)}`);
   say("");
-  return emit({ posted: true, comment: url, captures: unposted.map((c) => c.name) });
+  return emit({ posted: true, comment: url, captures: unposted.map((c) => c.name), attachments: manifest.attachments, sanitised: scrubbed });
 }
 
 /**
@@ -264,6 +383,51 @@ async function verify(plan, captures, flags) {
     });
   }
 
+  /* **The manifest, and only the manifest.** `post` recorded one URL per
+     attachment it uploaded, each already checked against the approved origin
+     and path shape. They are re-checked here rather than trusted, because the
+     lock is a file on disk — but under no circumstances is a URL taken out of
+     the comment body, which is where an accessibility snapshot of a driven
+     application goes and therefore where attacker-chosen text goes. */
+  const recorded = held?.attachments ?? [];
+  if (!recorded.length) {
+    return fail(EXIT.evidence, {
+      problem: "no attachment is recorded for this run, so there is nothing that may be verified",
+      because: [
+        `${last.comment} was posted, and the lock records no attachment URL for it`,
+        "verify checks a recorded manifest, not the comment body: the body contains a fenced accessibility snapshot of the driven application, so a URL found in it is a URL the page chose",
+      ],
+      instead: [
+        `control-firetower evidence post --pr ${flags.pr ?? last.pr}    post again, which records the manifest`,
+        `open ${last.comment}                         or read the comment yourself`,
+        "",
+        "Do not clean up. Until a reviewer can see it, it is not proof.",
+      ],
+      detail: { cause: "no-attachment-recorded" },
+    });
+  }
+
+  const rejected = recorded.map((a) => ({ ...a, check: approvedAttachment(a.url) })).filter((a) => !a.check.ok);
+  if (rejected.length) {
+    return fail(EXIT.evidence, {
+      problem: `${rejected.length} recorded attachment URL(s) are not on the one origin this command will send a credential to`,
+      because: [
+        ...rejected.map((a) => `${a.url} — ${a.check.why}`),
+        `the only approved destination is ${ATTACHMENT_ORIGIN}/user-attachments/assets/<uuid>`,
+        "a GitHub token is needed to read a private repository's attachment, so it must go only to an origin decided here and never to one anything else chose",
+      ],
+      instead: [
+        `cat ${plan.lock}                      read what is recorded`,
+        `control-firetower evidence post --pr ${flags.pr ?? last.pr}   post again from the captures on disk`,
+        "",
+        "This refuses rather than falling back to scanning the comment for images. That",
+        "fallback is what sent the operator's GitHub token to a host named by captured",
+        "page text.",
+      ],
+      detail: { cause: "attachment-not-approved" },
+    });
+  }
+
   let comment;
   try {
     const { stdout } = await run("gh", ["api", `repos/${repo}/issues/comments/${id}`], { maxBuffer: 1 << 24 });
@@ -276,12 +440,15 @@ async function verify(plan, captures, flags) {
     });
   }
 
-  const images = [...String(comment.body).matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)].map((m) => m[1]);
-  const local = images.filter((u) => !/^https?:\/\//.test(u));
+  /* The body is asked one question — does it contain the URL that was
+     recorded — and never asked to supply one. A recorded attachment the
+     comment does not reference is a broken image for a reviewer. */
+  const text = String(comment.body ?? "");
+  const missing = recorded.filter((a) => !text.includes(a.url));
   const token = await ghToken();
   const resolved = [];
-  for (const url of images.filter((u) => /^https?:\/\//.test(u))) {
-    resolved.push(await reaches(url, token));
+  for (const attachment of recorded) {
+    resolved.push({ name: attachment.name, ...(await reaches(attachment.url, token)) });
   }
 
   const broken = resolved.filter((r) => !r.ok);
@@ -289,18 +456,18 @@ async function verify(plan, captures, flags) {
   table([
     "Comment",
     ["url", last.comment],
-    ["images", `${images.length} referenced, ${resolved.length} absolute, ${local.length} still local`],
+    ["attachments", `${recorded.length} recorded for this run, all on ${ATTACHMENT_ORIGIN}`],
+    ["in the body", missing.length ? `${missing.length} recorded attachment(s) are NOT referenced by the comment` : "every recorded attachment is referenced"],
     ...resolved.map((r) => [r.ok ? "resolves" : "BROKEN", `${r.ok ? `${r.status} ${r.type}` : r.why}  ${r.url.slice(0, 72)}`, r.ok ? tick() : cross()]),
   ]);
   say("");
 
-  if (local.length || broken.length || !images.length) {
+  if (missing.length || broken.length) {
     return fail(EXIT.evidence, {
       problem: "the comment is up but its proof does not render for a reviewer",
       because: [
-        ...(local.length ? [`${local.length} image reference(s) are still local paths: ${local.join(", ")}`] : []),
-        ...(broken.length ? broken.map((b) => `${b.url} -> ${b.status ?? b.why}`) : []),
-        ...(images.length ? [] : ["the comment body references no images at all"]),
+        ...missing.map((a) => `${a.url} is recorded for capture "${a.name}" and the comment body does not reference it`),
+        ...broken.map((b) => `${b.url} -> ${b.status ?? b.why}`),
       ],
       instead: [
         "Post again with --attach so gh rewrites the reference to the uploaded asset:",
@@ -308,6 +475,7 @@ async function verify(plan, captures, flags) {
         "",
         "Do not clean up. Until a reviewer can see it, it is not proof.",
       ],
+      detail: { cause: "attachment-broken" },
     });
   }
 
@@ -317,6 +485,63 @@ async function verify(plan, captures, flags) {
   say(`  ${dim("next")} control-firetower down --all`);
   say("");
   return emit({ verified: true, comment: last.comment, images: resolved });
+}
+
+/**
+ * Record the attachments GitHub rendered, as the manifest `verify` will use.
+ *
+ * Read back once, here, under three conditions that all have to hold:
+ * the URL clears `approvedAttachment`, its alt text is the name of a capture
+ * this post attached, and the count matches what was uploaded. A reference
+ * that fails any of them is not recorded, and an unrecordable post is a
+ * refusal rather than a post with a looser manifest — because the looser
+ * manifest is the bug.
+ */
+async function recordAttachments(plan, { repo, comment, expected }) {
+  if (!expected.length) return { ok: true, attachments: [] };
+  const id = comment?.split("#issuecomment-").pop();
+  const where = repo ?? (await originRepo(plan));
+  if (!id || !where) return { ok: false, why: `cannot read the comment back (url ${comment ?? "none"}, repo ${where ?? "unknown"})` };
+
+  let body;
+  try {
+    const { stdout } = await run("gh", ["api", `repos/${where}/issues/comments/${id}`], { maxBuffer: 1 << 24 });
+    body = String(JSON.parse(stdout).body ?? "");
+  } catch (error) {
+    return { ok: false, why: `reading the comment back failed: ${String(error.stderr ?? error.message).trim().split("\n").pop()}` };
+  }
+
+  const wanted = new Set(expected.map((c) => c.name));
+  const attachments = [];
+  for (const match of body.matchAll(/!\[([^\]]*)\]\(([^)\s]+)\)/g)) {
+    const [, alt, candidate] = match;
+    if (!wanted.has(alt)) continue;
+    const approved = approvedAttachment(candidate);
+    if (!approved.ok) continue;
+    if (attachments.some((a) => a.name === alt)) continue;
+    attachments.push({ name: alt, url: approved.url, recordedAt: new Date().toISOString() });
+  }
+
+  if (attachments.length !== expected.length) {
+    return {
+      ok: false,
+      why: `${expected.length} image(s) were attached and ${attachments.length} approved attachment URL(s) could be matched to them in the rendered comment`,
+    };
+  }
+  updateLock(plan, { attachments: [...(readLock(plan).run?.attachments ?? []), ...attachments] });
+  return { ok: true, attachments };
+}
+
+/** What the sanitisation step did, as rows. Images are named, never claimed clean. */
+function sanitationRows(cleaned, scrubbed) {
+  const images = cleaned.flatMap((c) => c.images);
+  return [
+    ["text", scrubbed.length ? `removed ${scrubbed.join("; ")}` : "nothing matched a secret this run knows about"],
+    ["snapshot", "secret-named field values blanked; code fences and image syntax in captured text neutralised"],
+    ["images", images.length
+      ? `${images.length} PNG(s) PUBLISHED AS CAPTURED — pixels cannot be redacted. ${dim("Capture synthetic data only")}`
+      : "none"],
+  ];
 }
 
 function hold(plan, captures) {
@@ -359,6 +584,13 @@ function hold(plan, captures) {
  * the whole point of this step is that a reviewer can see the picture.
  */
 async function reaches(url, token) {
+  /* Belt and braces: this is the only function that attaches a credential,
+     so it re-checks its own argument rather than relying on every caller
+     having done so. There is exactly one approved destination. */
+  const approved = approvedAttachment(url);
+  if (!approved.ok) {
+    return { url, status: null, ok: false, why: `refused before any request: ${approved.why}` };
+  }
   try {
     const hop = await fetch(url, {
       method: "GET",
@@ -367,6 +599,13 @@ async function reaches(url, token) {
       signal: AbortSignal.timeout(15_000),
     });
     const location = hop.headers.get("location");
+    /* The redirect target is GitHub's choice of signed S3 URL and gets no
+       credential — that is what the 403 the first run hit was about. It is
+       still checked for a scheme, because an asset hop is https or it is not
+       an asset hop. */
+    if (location && !/^https:\/\//.test(location)) {
+      return { url, status: hop.status, ok: false, why: `the attachment redirected to ${location.slice(0, 60)}, which is not https` };
+    }
     if (!location) {
       return { url, status: hop.status, ok: hop.ok, why: hop.ok ? null : `HTTP ${hop.status} and no redirect${token ? "" : ", and there was no gh token to ask with"}` };
     }
