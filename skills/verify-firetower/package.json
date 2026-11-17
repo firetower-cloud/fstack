@@ -1,0 +1,19 @@
+{
+  "name": "control-firetower",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The control CLI for the verify-firetower skill. Self-contained: it does not use the firetower checkout's pnpm tree.",
+  "type": "module",
+  "bin": {
+    "control-firetower": "./control-firetower"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "playwright-core": "^1.50.0"
+  }
+}
