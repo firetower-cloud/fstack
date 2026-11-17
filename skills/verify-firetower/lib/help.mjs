@@ -571,8 +571,10 @@ WHAT IT WILL NOT DO
   ui/Titlebar.tsx is the proof: nothing in its name says native, and its line
   29 is 'import { drag } from "~/drag"'.
 
-  Measured against firetower 0.55.0: of 557 code files under desktop/src/,
-  421 are inside and 136 outside. It is a boundary, not a wall.
+  One measurement, taken on 2026-11-17 against firetower 0.55.0: of the 557
+  non-test code files under desktop/src/, 421 came out inside and 136 outside.
+  It is a boundary, not a wall. Your checkout is what counts, and --touched
+  recomputes every verdict from it rather than reading those figures.
 
 USAGE
   control-firetower limits [--target frontend|shell|any] [--touched <path>]... [--json]

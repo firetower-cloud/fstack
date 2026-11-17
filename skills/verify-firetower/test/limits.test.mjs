@@ -45,7 +45,7 @@ function fixture() {
   write("desktop/src-tauri/src/main.rs", "fn main() {}\n");
   write("desktop/src-tauri/tauri.conf.json", "{}\n");
 
-  /* The five QA found called safe, with the real import that makes each one
+  /* The ones QA found called safe, with the real import that makes each one
      reach the surface. */
   write("desktop/src/api/download.ts", 'import { bridge } from "~/bridge";\nimport { apiBase } from "~/client/http";\nexport const save = bridge;\n');
   write("desktop/src/ui/ArtifactTab.tsx", 'import { openExternal } from "~/open";\nimport { Pop } from "~/ui/Pop";\nexport const Tab = () => null;\n');
@@ -65,7 +65,7 @@ function fixture() {
   write("desktop/src/ui/ContextMenu.tsx", 'import { Pop } from "~/ui/Pop";\nimport { apiBase } from "~/client/http";\nexport const Menu = () => null;\n');
 
   /* Other applications and other languages. */
-  write("mobile/lib/main.dart", "void main() {}\n");
+  write("mobile/app/(tabs)/index.tsx", "export default () => null;\n");
   write("web/app/page.tsx", "export default () => null;\n");
   write("crates/ft-server/src/lib.rs", "pub fn serve() {}\n");
   write("migrations/0001_init.sql", "CREATE TABLE tasks ();\n");
@@ -77,8 +77,8 @@ test("every path QA found the denylist calling safe is now outside", () => {
   const { root, remove } = fixture();
   try {
     const paths = [
-      /* the only bridge.save() call site — limits' own table says "PARTLY,
-         AND MISLEADINGLY" about it */
+      /* calls bridge.save() — limits' own table says "PARTLY, AND
+         MISLEADINGLY" about it */
       "desktop/src/api/download.ts",
       /* calls loadArtifact — "NO, AND THE REASON IS THE POINT" */
       "desktop/src/ui/ArtifactTab.tsx",
@@ -91,7 +91,7 @@ test("every path QA found the denylist calling safe is now outside", () => {
       "crates/ft-server/src/lib.rs",
       "migrations/0001_init.sql",
       /* different applications entirely */
-      "mobile/lib/main.dart",
+      "mobile/app/(tabs)/index.tsx",
       "web/app/page.tsx",
     ];
     for (const given of paths) {
@@ -166,8 +166,8 @@ test("a graph that cannot be walked is outside, not inside", () => {
 test("@tauri-apps is the native surface wherever it is imported from", () => {
   const { root, remove } = fixture();
   try {
-    /* The five modules in NATIVE are the ones that do this today. This is
-       what catches the sixth, without anybody having to add it to a list. */
+    /* Some of NATIVE is listed because those modules do exactly this. This
+       is what catches the next one, without anybody adding it to a list. */
     writeFileSync(
       path.join(root, "desktop/src/ui/Sixth.tsx"),
       'import { invoke } from "@tauri-apps/api/core";\nexport const Sixth = () => invoke("x");\n',

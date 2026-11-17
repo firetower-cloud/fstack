@@ -36,12 +36,12 @@ const ASSET = /\.(css|scss|svg|png|jpe?g|gif|webp|woff2?|ttf|json|md|txt|wasm|ic
  * *is* one of these or if it can reach one, however many hops away.
  */
 export const NATIVE = [
-  ["desktop/src/bridge.ts", "bridge.ts is the native surface itself: 11 of its 12 members are no-ops in Chrome, and save and loadArtifact are different gestures rather than absent ones"],
+  ["desktop/src/bridge.ts", "bridge.ts is the native surface itself: the file exists to hold a browser implementation apart from a native one, so every member of it differs between the two. Some are absent in Chrome; the dangerous ones are those a browser can approximate rather than refuse — save and loadArtifact today — because an approximation passes a test that a refusal would fail"],
   ["desktop/src/open.ts", "open.ts reaches plugin-opener directly, past the bridge"],
   ["desktop/src/drag.ts", "drag.ts calls startDragging() on the Tauri window; Chrome's tauriWindow() is null"],
   ["desktop/src/update.ts", "update.ts is the updater; in Chrome it is mocked end to end"],
   ["desktop/src/telemetry.ts", "telemetry.ts reads the app version from api/app, which is absent in a browser"],
-  ["desktop/src/platform.ts", "platform detection takes the userAgentData branch in Chrome and the navigator.platform fallback in both shipped webviews"],
+  ["desktop/src/platform.ts", "platform detection reads userAgentData and falls back to navigator.platform. userAgentData is Chromium-only, so Chrome always takes the first branch and the non-Chromium webviews Firetower ships on always take the fallback — the branch a Chrome run can never execute"],
   ["desktop/src/ui/Resize.tsx", "the resize strips are window-server gestures, and may not be drivable by any automated route"],
   ["desktop/src/ui/drop.ts", "the HTML5 drop path can only be driven with a synthetic DataTransfer; a real OS file drop needs a human"],
   ["desktop/src/skills.ts", "skills.ts carries the file-drop path (:168-181), which Chrome can only fake"],
@@ -50,21 +50,21 @@ export const NATIVE = [
 /** Paths that are outside before any graph is walked, and why. */
 const OUTSIDE_BY_LOCATION = [
   [/^desktop\/src-tauri\//, "anything under src-tauri is the shell: not loaded, not compiled and not reachable in a Chrome run"],
-  [/(^|\/)tauri(\.[a-z]+)?\.conf\.json$/, "the Tauri configuration decides the CSP and the titlebar mechanism, and Vite applies neither"],
+  [/(^|\/)tauri(\.[a-z]+)?\.conf\.json$/, "the Tauri configuration decides how the shipped window and its webview are set up — the CSP and the titlebar mechanism among them — and Vite applies none of it"],
   [/^desktop\/scripts\//, "the packaging scripts and the installer matrix are not observable from a browser tab"],
   [/^\.github\/workflows\//, "a workflow is not loaded by the page; the shell transport's own evidence comes out of one"],
-  [/^crates\//, "a Rust crate is compiled into the server or the shell. A browser executes none of it, and nothing a Chrome run does measures it"],
+  [/^crates\//, "a Rust crate is compiled, not served to the page. A browser executes none of it, and nothing a Chrome run does measures it"],
   [/^migrations\//, "a SQL migration is applied by the server to its database. A Chrome run can observe a consequence of one through the API; it cannot carry a claim about the migration"],
-  [/^mobile\//, "mobile/ is a Flutter application, not the React app this transport renders"],
+  [/^mobile\//, "mobile/ is a different application on a different runtime from the desktop renderer this transport drives; a Chrome run against that renderer carries no claim about it"],
   [/^web\//, "web/ is a different application from the desktop renderer this transport drives"],
-  [/^api\//, "api/ is the OpenAPI contract, not code the page runs"],
+  [/^api\//, "api/ is the interface description the clients are generated from, not code the page runs: a Chrome run exercises whatever was generated, never this"],
   [/^(deploy|install|fixtures|docs)\//, "not application code the renderer loads"],
 ];
 
 /**
  * A `@tauri-apps/*` import is the native surface by definition, wherever it
- * appears. The five modules above are the ones that do it today; this is what
- * catches the sixth when somebody adds it.
+ * appears. Some of the modules above are listed because they do exactly this;
+ * this rule is what catches the next one, without anybody having to notice.
  */
 const TAURI_PACKAGE = /^@tauri-apps\//;
 

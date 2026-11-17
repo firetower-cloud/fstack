@@ -7,9 +7,10 @@
  * passed.
  *
  * Carried over from the research on firetower#338 rather than reconstructed.
- * Every line reference below is into the firetower checkout at the time that
- * research closed, and 'control-firetower limits --json' prints them so a
- * reviewer can check each one.
+ * Every line reference below was read against firetower 0.55.0 on 2026-11-17
+ * and is a measurement of that checkout, not a standing fact about the code.
+ * 'control-firetower limits --json' prints them so a reviewer can check each
+ * one against the checkout in front of them rather than trusting this file.
  *
  * Three columns, because they fail differently:
  *   chrome       what the frontend transport in this binary proves
@@ -18,7 +19,7 @@
  */
 import { reachesNative } from "./reach.mjs";
 
-/** The native surface. Twelve bridge members, then everything past the bridge. */
+/** The native surface: every member of the Bridge interface, then everything past it. */
 export const BRIDGE = [
   {
     capability: "native",
@@ -39,7 +40,7 @@ export const BRIDGE = [
     where: "desktop/src/bridge.ts:51-52",
     chrome: "no — no-op (:166)",
     shell: "barely: the command returns, tray::waiting is reached (main.rs:48)",
-    residual: "the badge itself. Dock on macOS, taskbar overlay plus tray on Windows, nothing on Linux. Not in the webview",
+    residual: "the badge itself: the dock on macOS, a taskbar overlay plus the tray on Windows, and whatever the Linux desktop in front of you does with it. Wherever it is drawn, it is not in the webview",
   },
   {
     capability: "notify",
@@ -106,7 +107,7 @@ export const BRIDGE = [
   },
 ];
 
-/** bridge.ts claims to be the entire differing surface. Four modules go past it. */
+/** bridge.ts claims to be the entire differing surface. These are what goes past it. */
 export const PAST_BRIDGE = [
   {
     capability: "system-browser links and external auth",
@@ -126,7 +127,7 @@ export const PAST_BRIDGE = [
     capability: "the updater",
     where: "desktop/src/update.ts:80-146",
     chrome: "no — mocked",
-    shell: "no, not meaningfully: it needs two signed versions, and CI builds with createUpdaterArtifacts:false",
+    shell: "no, not meaningfully: it needs two signed versions, and CI builds with src-tauri/unsigned.conf.json, which sets createUpdaterArtifacts:false",
     residual: "AppImage self-replacement, Windows elevation. Release-workflow territory",
   },
   {
@@ -196,11 +197,11 @@ export const PAST_BRIDGE = [
 
 /** True of the whole approach, whichever transport runs. */
 export const STRUCTURAL = [
-  "This transport can never be pointed at a production-shaped server. ft-server reaches AllowOrigin::any() only under --dev (crates/ft-server/src/lib.rs:631); otherwise only the three tauri:// origins pass CORS and every call from the driven page is refused. So nothing here says anything about the CORS posture a deployment actually ships.",
-  "Chrome is one webview sample taken at the wrong end. Firetower ships on WKWebView (macOS), WebKitGTK 4.1 (Linux) and WebView2 (Windows). Chrome is nearest to Windows and furthest from macOS and Linux, which is where most development happens.",
-  "A single-tenant database. Firetower is one organisation per database; there is no fresh-organisation-per-run, so nothing here exercises tenant separation.",
-  "state:'Online' for a machine does not mean a session can run there. A host with no git and no tmux is Online with diagnosis:null. A run has to read GET /hosts/{id}/readiness and assert every required check is available.",
-  "A worker built on macOS is darwin-only (justfile:138-139 passes no --target), so FIRETOWER_WORKER_ARTIFACTS never matches a Linux container machine and the install silently downloads a release instead. A run that does not assert which worker was installed may verify the released worker while believing it verified the branch.",
+  "This transport can never be pointed at a production-shaped server. ft-server reaches AllowOrigin::any() only under --dev (crates/ft-server/src/lib.rs:631); otherwise only the tauri:// origins in its CLIENT_ORIGINS list pass CORS and every call from the driven page is refused. So nothing here says anything about the CORS posture a deployment actually ships.",
+  "Chrome is one webview sample taken at the wrong end. Firetower ships on WKWebView (macOS), WebKitGTK (Linux) and WebView2 (Windows). Chrome shares an engine family with WebView2 and with neither of the others, so it is furthest from macOS and Linux, which is where most development happens.",
+  "Nothing here exercises tenant separation. This transport has no fresh-organisation-per-run: a run drives one organisation's data, so whatever separation the deployment does or does not provide is neither measured nor contradicted by a pass.",
+  "state:'Online' for a machine does not mean a session can run there. The research on firetower#338 found a host with no git and no tmux reporting Online with diagnosis:null, so a run has to read GET /hosts/{id}/readiness and assert every required check is available rather than trusting the state.",
+  "A worker built on macOS is darwin-only (justfile:137-139 passes no --target), so FIRETOWER_WORKER_ARTIFACTS never matches a Linux container machine and the install silently downloads a release instead. A run that does not assert which worker was installed may verify the released worker while believing it verified the branch.",
   "The shell transport is not this binary. Per firetower#338 it is a WebdriverIO run with a per-OS driver provider, invoked by CI on three platforms — official (tauri-driver) on Windows and Linux, embedded on macOS, which has no alternative. This CLI reads its evidence and says what it does not cover. It does not launch it, and a 'drive --target shell' is refused rather than faked.",
   "Whether a macOS CI runner can host a rendering WKWebView at all is unestablished, and it is the largest open risk in the shell route. If it fails, macOS gets no real-binary coverage.",
 ];
@@ -211,7 +212,7 @@ export const STRUCTURAL = [
  * **This is an allowlist, and that is the whole point of it.** It used to be
  * twelve regular expressions with an open default, so every path that matched
  * none of them was declared provable — which made `desktop/src/api/download.ts`
- * (the only `bridge.save()` call site), `ui/Titlebar.tsx` (which imports the
+ * (which calls `bridge.save()`), `ui/Titlebar.tsx` (which imports the
  * denylisted `drag.ts`), a Rust crate and a SQL migration all read as safe. A
  * list of things that are forbidden, with everything else permitted, is the
  * exact shape `desktop/src/servers.ts:15-44` refuses: *not knowing that it is
@@ -232,9 +233,13 @@ export const STRUCTURAL = [
  *      went wrong, not permission
  *   4  only a fully-read, native-free reachable set is inside
  *
- * Measured against firetower 0.55.0: 421 of 557 modules under `desktop/src/`
- * are inside, so this is a boundary rather than a wall — and the 136 that are
- * not include every file QA found the denylist calling safe.
+ * One measurement, and it reads as one: run against firetower 0.55.0 on
+ * 2026-11-17, over the 557 non-test code files under `desktop/src/` — the
+ * `.ts/.tsx/.js/.jsx/.mjs/.cjs` files, excluding `*.test.*`; counting the
+ * tests too makes it 640 — 421 came out inside and 136 outside. So this is a
+ * boundary rather than a wall, and the outside set included every file QA
+ * found the denylist calling safe. The figure moves whenever the import graph
+ * does, and nothing reads it: every verdict is recomputed per path.
  */
 export function checkTouched(paths, checkout) {
   return paths.map((given) => {

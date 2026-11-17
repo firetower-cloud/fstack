@@ -349,8 +349,9 @@ thing that stops a QA pass reporting "verified" for code it never ran.
 
 It was a denylist of twelve native filenames with everything else permitted,
 and an open default makes the one command whose job is to refuse run the
-wrong way. It called `desktop/src/api/download.ts` — the only `bridge.save()`
-call site — safe, along with `ui/ArtifactTab.tsx`, `artifacts/posters.tsx`,
+wrong way. It called `desktop/src/api/download.ts` — which calls
+`bridge.save()` — safe, along with `ui/ArtifactTab.tsx`,
+`artifacts/posters.tsx`,
 `ui/Titlebar.tsx` (which *imports* the denylisted `drag.ts`), and all of
 `crates/`, `migrations/`, `mobile/` and `web/`: a Rust crate was told that *a
 Chrome run can carry a claim about the React app here.*
@@ -375,25 +376,32 @@ A path is now inside only where that can be positively established:
 with no graph to read, every path under `desktop/src/` reads as outside, which
 is the safe direction rather than a convenience.
 
-Measured against `0.55.0`: of 557 code files under `desktop/src/`, **421 are
-inside and 136 outside**. Over the whole repository, 1,461 files are outside
-by rule 1 before any graph is consulted. It is a boundary, not a wall.
+One measurement, taken on 2026-11-17 against `0.55.0`: of the 557 non-test
+code files under `desktop/src/`, **421 came out inside and 136 outside**.
+Everything else in the repository — the large majority of it — is outside by
+rule 1 before any graph is consulted. It is a boundary, not a wall. The
+figures move with the import graph; `--touched` recomputes each verdict from
+your checkout rather than reading them.
 
-**A Chrome run proves the React app and almost nothing below it.** Eleven of
-the twelve members of `desktop/src/bridge.ts` are no-ops in a browser:
-`native`, `setTitle`, `setBadge`, `notify`, `minimize`, `zoom`, `close`,
-`shoot`, `canShoot`, `loadArtifact` and `secrets`. The twelfth is worse than
-absent — `save` takes the browser branch, `fetch` plus a blob plus an
-`a download`, which the file itself is at pains to say is *not the same
-gesture dressed differently*. `loadArtifact` is the same trap from the other
-side: it returns null, and the mixed-content refusal the native path exists to
-dodge never happens on Vite. **A passing Chrome run on either of those looks
+**A Chrome run proves the React app and almost nothing below it.**
+`desktop/src/bridge.ts` exists to hold a browser implementation apart from a
+native one, so every member of it differs between the two. Most of them
+differ by being unavailable: `setBadge`, `notify`, `minimize`, `zoom` and
+`close` are empty functions, `native` is `false`, `shoot`, `canShoot`,
+`loadArtifact` and `secrets` answer null or false, and `setTitle` sets
+`document.title`, which is a different thing. The dangerous one is the member
+a browser can approximate rather than refuse: `save` takes the browser
+branch, `fetch` plus a blob plus an `a download`, which the file itself is at
+pains to say is *not the same gesture dressed differently*. `loadArtifact` is
+the same trap from the other side: it returns null, and the mixed-content
+refusal the native path exists to dodge never happens on Vite. **A passing Chrome run on either of those looks
 like evidence.**
 
 **And `bridge.ts` is not the whole native surface**, despite its header
-claiming to be. Four modules reach Tauri directly past it — `open.ts` (system
-browser and external links), `drag.ts` (titlebar drag and double-click
-maximise), `update.ts` (the updater), `telemetry.ts` (the app version) — plus
+claiming to be. Four modules import `@tauri-apps/*` directly past it today —
+`open.ts` (system browser and external links), `drag.ts` (titlebar drag and
+double-click maximise), `update.ts` (the updater), `telemetry.ts` (the app
+version) — plus
 `ui/Resize.tsx`, the Windows-only tray, and the HTML5 file-drop path that
 exists *because* Tauri's own drag-drop handler is off. A cannot-prove list
 scoped to `bridge.ts` alone would silently omit the updater, the opener, the
@@ -420,9 +428,11 @@ window server and the webview usually never sees the `mouseup`.
 production-shaped server, because `ft-server` reaches `AllowOrigin::any()`
 only under `--dev`. Chrome is one webview sample taken at the wrong end —
 nearest to Windows, furthest from macOS and Linux, which is where most
-development happens. Firetower is single-tenant per database, so nothing here
-exercises tenant separation. A machine reading `state: "Online"` does not mean
-a session can run there; read `GET /hosts/{id}/readiness` and assert every
+development happens. Nothing here exercises tenant separation: there is no
+fresh-organisation-per-run, so a pass neither measures nor contradicts
+whatever separation a deployment provides. A machine reading
+`state: "Online"` does not mean a session can run there; read
+`GET /hosts/{id}/readiness` and assert every
 required check is `available`. And a worker built on macOS is darwin-only, so
 an install onto a Linux machine silently downloads a release instead — a run
 that does not assert which worker was installed may verify the released worker
