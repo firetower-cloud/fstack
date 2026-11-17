@@ -1,0 +1,314 @@
+#!/usr/bin/env node
+/**
+ * control-firetower — drive a real, isolated Firetower and prove what you saw.
+ *
+ * The entry point: parse, resolve this run's isolation key and everything
+ * derived from it, dispatch. Eight commands, each deep enough to be worth
+ * composing: the work is in lib/, and the help an agent reads cold is in
+ * lib/help.mjs.
+ *
+ * Part of the verify-firetower skill. Run `./control-firetower --help` first;
+ * it is written for a reader who has never seen Firetower and will read it
+ * once.
+ */
+import { parse } from "./lib/args.mjs";
+import { isolationKey, findCheckout, plan as makePlan } from "./lib/key.mjs";
+import { configure, emit, fail, say, table, dim, EXIT } from "./lib/out.mjs";
+import { TOP, COMMANDS, USAGE_LINES } from "./lib/help.mjs";
+import { up, down, reset } from "./lib/stack.mjs";
+import { doctor } from "./lib/doctor.mjs";
+import { call } from "./lib/api.mjs";
+import { drive } from "./lib/drive.mjs";
+import { evidence } from "./lib/evidence.mjs";
+import { BRIDGE, PAST_BRIDGE, STRUCTURAL, checkTouched, nothingProves } from "./lib/limits.mjs";
+
+const VERSION = "0.1.0-prototype";
+const KNOWN = ["up", "doctor", "api", "drive", "evidence", "reset", "down", "limits"];
+
+const { positional, flags, repeated, missing } = parse(process.argv.slice(2));
+configure(flags);
+
+if (missing) {
+  process.exit(
+    fail(EXIT.usage, {
+      problem: `--${missing} was given with no value`,
+      because: ["every flag that is not a switch takes a value"],
+      instead: [`control-firetower --help`],
+    }),
+  );
+}
+
+if (flags.version) {
+  console.log(VERSION);
+  process.exit(EXIT.ok);
+}
+
+const command = positional[0];
+
+if (!command) {
+  if (flags.help) {
+    console.log(TOP);
+    process.exit(EXIT.ok);
+  }
+  console.log(USAGE_LINES);
+  process.exit(EXIT.usage);
+}
+
+if (!KNOWN.includes(command)) {
+  process.exit(
+    fail(EXIT.usage, {
+      problem: `there is no command called "${command}"`,
+      because: [`the commands are ${KNOWN.join(", ")}`, ...nearest(command)],
+      instead: ["control-firetower --help          written to be read cold"],
+    }),
+  );
+}
+
+if (flags.help) {
+  console.log(COMMANDS[command]);
+  process.exit(EXIT.ok);
+}
+
+/* `limits` is the one command that needs nothing: no checkout, no key, no
+   stack. It is what an agent runs before writing the word "verified", and
+   making it depend on a running stack would be a reason not to run it. */
+if (command === "limits") process.exit(await limits(positional.slice(1), flags, repeated));
+
+const checkout = flags.checkout ?? findCheckout(process.cwd());
+if (!checkout) {
+  process.exit(
+    fail(EXIT.usage, {
+      problem: "there is no Firetower checkout at or above the working directory",
+      because: [
+        `looked upwards from ${process.cwd()} for crates/ft-server/Cargo.toml`,
+        "this skill drives Firetower, so it needs the checkout it is verifying",
+      ],
+      instead: [
+        "control-firetower --checkout /path/to/firetower doctor",
+        "",
+        "control-firetower limits   is the one command that needs no checkout",
+      ],
+    }),
+  );
+}
+
+const { key, source } = isolationKey({ key: flags.key, checkout });
+if (!key) {
+  process.exit(
+    fail(EXIT.usage, {
+      problem: "no isolation key could be derived, and every port comes from one",
+      because: [
+        "$FIRETOWER_SESSION is unset, and git could not be asked about this checkout",
+        "a key is what keeps this run off the developer's own ports",
+      ],
+      instead: [
+        "control-firetower --key <something-unique-to-this-run> doctor",
+        "",
+        "Inside a Firetower session $FIRETOWER_SESSION is already exported and is the",
+        "right answer; outside one, any stable string will do.",
+      ],
+    }),
+  );
+}
+
+const plan = { ...makePlan({ key, checkout, flags }), keySource: source };
+
+let exit = EXIT.ok;
+try {
+  switch (command) {
+    case "up":
+      exit = await up(plan, flags);
+      break;
+    case "doctor":
+      exit = await doctor(plan, flags);
+      break;
+    case "api":
+      exit = await api(plan, positional.slice(1), flags);
+      break;
+    case "drive":
+      exit = await drive(plan, positional.slice(1), flags);
+      break;
+    case "evidence":
+      exit = await evidence(plan, positional.slice(1), flags);
+      break;
+    case "reset":
+      exit = await reset(plan, flags);
+      break;
+    case "down":
+      exit = await down(plan, flags);
+      break;
+  }
+} catch (error) {
+  exit = fail(EXIT.failed, {
+    problem: `control-firetower itself threw: ${error.message}`,
+    because: String(error.stack ?? "").split("\n").slice(0, 4),
+    instead: [
+      "This is a bug in the CLI rather than something you did. What is safe to do next:",
+      "",
+      "control-firetower doctor          nothing in it mutates anything",
+      "control-firetower down --dry-run  see what it thinks this run started",
+      "",
+      "Do not reach for `just reset` or `pkill`. Neither is a recovery step on this",
+      "machine; both destroy other sessions' work.",
+    ],
+  });
+}
+process.exit(exit);
+
+/* ---------------------------------------------------------------- */
+
+async function api(plan, argv, flags) {
+  const method = (argv[0] ?? "").toUpperCase();
+  const route = argv[1];
+  if (!method || !route) {
+    return fail(EXIT.usage, {
+      problem: "api needs a method and a path",
+      because: ["paths are relative to /api/v1, so `GET /hosts` is the whole call"],
+      instead: [
+        "control-firetower api GET /bootstrap     who is answering, unauthenticated",
+        "control-firetower api GET /setup         is the wizard still in the way",
+        "control-firetower api GET /hosts         the fleet",
+        "control-firetower api --help",
+      ],
+    });
+  }
+  const mutates = !["GET", "HEAD", "OPTIONS"].includes(method);
+  if (mutates && flags["dry-run"]) {
+    say("");
+    say(`${dim("dry run")} nothing has been sent`);
+    say("");
+    table([
+      "Would send",
+      ["request", `${method} ${plan.control ? `http://127.0.0.1:${plan.control.value}` : ""}/api/v1${route}`],
+      ["body", flags.body ?? dim("none")],
+      ["as", "this run's administrator, after checking the recorded serverId answers"],
+    ]);
+    say("");
+    return emit({ dryRun: true, method, route, body: flags.body ?? null });
+  }
+
+  const { exit, result, instance } = await call(plan, method, route, { body: flags.body });
+  if (exit !== undefined) return exit;
+
+  if (flags.json) {
+    return emit(
+      { status: result.status, url: result.url, serverId: instance.recorded, body: result.body },
+      result.status < 400 ? EXIT.ok : EXIT.failed,
+    );
+  }
+  say("");
+  say(`  ${dim(`${method} ${result.url}`)}  ${result.status}  ${dim(`serverId ${instance.recorded}`)}`);
+  say("");
+  console.log(flags.raw ? result.body : JSON.stringify(result.body, null, 2));
+  say("");
+  return result.status < 400 ? EXIT.ok : EXIT.failed;
+}
+
+/**
+ * `limits` — what the transport cannot prove.
+ *
+ * Written from the research on firetower#338 rather than reconstructed, and
+ * kept as data so a run can check the files a change touched against it. The
+ * point of the exit code is that an agent can gate the word "verified" on it.
+ */
+async function limits(argv, flags, repeated) {
+  const target = flags.target ?? "frontend";
+  const touched = repeated.touched ?? [];
+
+  if (touched.length) {
+    const results = checkTouched(touched);
+    const blocked = results.filter((r) => !r.provable);
+    if (flags.json) {
+      return emit(
+        { target, touched: results, verdict: blocked.length ? "cannot-prove" : "within-transport" },
+        blocked.length ? EXIT.cannotProve : EXIT.ok,
+      );
+    }
+    say("");
+    table([
+      "Touched",
+      ...results.map((r) => [r.path, r.provable ? r.why : `OUTSIDE THIS TRANSPORT — ${r.why}`]),
+    ]);
+    say("");
+    if (!blocked.length) {
+      say("  Nothing you named is below the bridge. A Chrome run can carry a claim about");
+      say("  the React app here — about what it renders and what it sends, not about the shell.");
+      say("");
+      return EXIT.ok;
+    }
+    return fail(EXIT.cannotProve, {
+      problem: `${blocked.length} of ${results.length} path(s) are outside what a Chrome run proves`,
+      because: blocked.map((b) => `${b.path}: ${b.why}`),
+      instead: [
+        'Do not write "verified". Write what you drove and what remains unexercised.',
+        "",
+        "control-firetower limits --target shell    what a real-binary run in CI would add",
+        "",
+        "The shell transport is .github/workflows/desktop.yml's three-platform matrix.",
+        "If the change matters, that is where the evidence has to come from — and some",
+        "of these rows have no automated route at all.",
+      ],
+    });
+  }
+
+  if (flags.json) {
+    return emit({
+      target,
+      bridge: BRIDGE,
+      pastBridge: PAST_BRIDGE,
+      structural: STRUCTURAL,
+      nothingProves: nothingProves(),
+      source: "firetower#338, carried over rather than reconstructed",
+    });
+  }
+
+  say("");
+  say(`  ${dim("what this transport cannot prove")}  target ${target}`);
+  say("");
+  if (target === "frontend" || target === "any") {
+    say(`  ${dim("desktop/src/bridge.ts — twelve members, eleven no-ops in Chrome")}`);
+    table(BRIDGE.map((row) => [row.capability, `${row.chrome}`]));
+    say("");
+    say(`  ${dim("past the bridge — bridge.ts claims to be the whole differing surface; it is not")}`);
+    table(PAST_BRIDGE.map((row) => [row.capability, `${row.where}: ${row.chrome}`]));
+    say("");
+  }
+  if (target === "shell") {
+    say(`  ${dim("what a real binary adds, and what it still does not reach")}`);
+    table([...BRIDGE, ...PAST_BRIDGE].map((row) => [row.capability, row.shell]));
+    say("");
+  }
+  if (target === "any") {
+    say(`  ${dim("nothing automated proves these, on any transport")}`);
+    table(nothingProves().map((row) => [row.capability, row.residual]));
+    say("");
+  }
+  say(`  ${dim("true of the whole approach")}`);
+  for (const line of STRUCTURAL) {
+    say("");
+    for (const wrapped of wrap(line, 76)) say(`    ${wrapped}`);
+  }
+  say("");
+  say("  Before writing \"verified\": control-firetower limits --touched <path>");
+  say("");
+  return EXIT.ok;
+}
+
+function wrap(text, width) {
+  const out = [];
+  let line = "";
+  for (const word of text.split(" ")) {
+    if ((line + word).length > width) {
+      out.push(line.trimEnd());
+      line = "";
+    }
+    line += `${word} `;
+  }
+  if (line.trim()) out.push(line.trimEnd());
+  return out;
+}
+
+function nearest(given) {
+  const close = KNOWN.filter((k) => k.startsWith(given[0]) || k.includes(given) || given.includes(k));
+  return close.length ? [`did you mean: ${close.join(", ")}`] : [];
+}
