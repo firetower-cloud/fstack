@@ -61,6 +61,15 @@ Six steps, not four, and the two everybody misses are 4 and 6:
 
 Then `/bootstrap` finally has a `serverId`, and `up` records it.
 
+**`up --first-run` stops after three of them on purpose.** Steps 4 and 6 are
+what clear the two first-run gates, so an instance that has had them cannot
+show the screens the first-run journeys are about. `--first-run` builds,
+starts Postgres, serves, seeds the administrator through
+`ADMIN_INITIAL_PASSWORD` — which leaves `must_change_password` set, because a
+password that came out of a file cannot quietly become the permanent one —
+takes one token, and stops. `reset --first-run` does the same from a run that
+is already up, in about 3s.
+
 **The first `up` takes about 71 seconds and prints nothing for 64 of them.**
 Those 64 seconds are `cargo build -p ft-cli`, which produces no output at all
 while it runs. It is the build, not a hang.
@@ -159,7 +168,14 @@ already in the repository, one line long.
 ./control-firetower drive audit                          # re-drive every handle against the app
 ./control-firetower drive open tasks --as tasks --feature tasks
 ./control-firetower drive act add-a-machine --as probing
+./control-firetower drive act replace-the-temporary-password   # a first-run journey
 ```
+
+**The feature map is in `references/features/`** — one file per feature, each
+one a recipe with the preconditions it needs, the commands that drive it and
+the observable result of each. Its `README.md` carries the baseline every
+recipe starts from and the order a full regression sweep walks them. Read the
+file for the journey you are testing before you drive anything.
 
 `playwright-core` against Chrome, against the desktop's own Vite renderer,
 against this run's `ft-server`. Signing in by typing the address into the
@@ -455,9 +471,17 @@ together. A copy whose origin is stale is worse than no copy — and the two
 harnesses already in the firetower checkout are what that looks like after
 nobody runs them for a while.
 
-Two handles cannot be re-checked by `audit` and are marked rather than
-assumed: the forced password change and the setup wizard, which every
-prepared run has already cleared. They were verified once by standing up a
-deliberately unprepared instance — fresh database, `ft-server --dev`, neither
-step 4 nor step 6 — and the procedure is written into `lib/vocabulary.mjs`
-beside them.
+**Which half of the vocabulary `audit` can re-check depends on the instance
+it is given, and it says which.** From a prepared run it drives the app's own
+states and gestures, and reports the two first-run gates as not re-checkable
+from there — they have been cleared by the steps that prepared it. From an
+instance brought up with `--first-run` it drives the first-run journeys,
+which open both gates on the way through, and then the app's states behind
+them: one pass over everything.
+
+Some entries describe an install in a particular state — an empty fleet, a
+bare repositories screen, a machine that has not been added yet. Those say
+what they need, `audit` asks the control plane before driving them, and
+reports them as not performed with the reason rather than failing them. The
+feature map's sweep order is the other half of that fact: the entries about
+an empty install are walked before the ones that fill it.

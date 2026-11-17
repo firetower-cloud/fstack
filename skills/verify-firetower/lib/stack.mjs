@@ -27,6 +27,17 @@ import { EXIT, fail, emit, say, step, done, note, table, dim } from "./out.mjs";
 
 const run = promisify(execFile);
 const STEPS = 6;
+/**
+ * `up --first-run` stops after four of them, deliberately.
+ *
+ * Steps 4 and 6 are the two that clear the first-run gates, so an instance
+ * that has had them done cannot show either screen. A run that wants to drive
+ * the forced password change or the setup wizard needs an instance that has
+ * not: build, Postgres, a server with a seeded administrator, and a token.
+ * Nothing else. firetower#336 is why this exists — those two journeys were
+ * exercised by nothing in the checkout.
+ */
+const FIRST_RUN_STEPS = 4;
 
 /**
  * This run's Postgres, as a compose file of its own.
@@ -75,12 +86,26 @@ const compose = (plan, ...args) =>
     maxBuffer: 1 << 24,
   });
 
-export function serverEnv(plan) {
+export function serverEnv(plan, { adminPassword } = {}) {
   return {
     ...process.env,
     DATABASE_URL: databaseUrl(plan),
     FIRETOWER_HOME: plan.home,
     FIRETOWER_PUBLIC_URL: `http://127.0.0.1:${plan.renderer.value}`,
+    /**
+     * Only for `up --first-run`: seed the first administrator's password
+     * instead of inventing one and printing it.
+     *
+     * `ensure_admin` (crates/ft-server/src/lib.rs:383-427) takes it when no
+     * user exists yet and ignores it afterwards, and either way the account
+     * is created with `must_change_password` set
+     * (`accounts.rs:193-201`) — "a credential that came out of a file cannot
+     * quietly become the permanent one". So this makes the forced password
+     * change *reachable* rather than skipping it, and it is the unattended
+     * route: the invented password is written to the server's stderr and
+     * would have to be scraped back out of a log file.
+     */
+    ...(adminPassword ? { ADMIN_INITIAL_PASSWORD: adminPassword, ADMIN_USERNAME: "admin" } : {}),
   };
 }
 
@@ -119,6 +144,8 @@ export function describe(plan) {
 }
 
 export async function up(plan, flags) {
+  const firstRun = Boolean(flags["first-run"]);
+  const total = firstRun ? FIRST_RUN_STEPS : STEPS;
   mkdirSync(plan.scratch, { recursive: true, mode: 0o700 });
   mkdirSync(plan.logs, { recursive: true });
   mkdirSync(plan.evidence, { recursive: true });
@@ -140,6 +167,30 @@ export async function up(plan, flags) {
        ECONNREFUSED and `lsof` showed the port free. An agent then goes
        looking for a process that is not there. */
     return refuse(seen, whyUpRefused(seen, plan));
+  }
+  /* A `claimed` instance is this run's own, answering, and deliberately
+     unprepared. Binding the port again would spawn a second server that
+     cannot have it and then report that the server never answered, so this
+     says what is actually there instead — which is the state `--first-run`
+     leaves behind, and the one its journeys need. */
+  if (seen.verdict === "claimed") {
+    const held = readLock(plan).run ?? {};
+    say("");
+    say(`${dim("already up, with its gates standing")} ${seen.at} is this run's by claim`);
+    say("");
+    table([
+      "This instance",
+      ["phase", `${held.phase}  ${dim("/bootstrap has no serverId until the organisation is named")}`],
+      ["first run", held.firstRun ? "yes — both gates stand" : dim("not recorded as a first-run instance")],
+      ["server pid", String(held.serverPid ?? "-")],
+    ]);
+    say("");
+    say("  Drive the journeys that need it, or start the run over:");
+    say("    control-firetower drive act replace-the-temporary-password");
+    say("    control-firetower drive act name-this-firetower");
+    say("    control-firetower down && control-firetower up");
+    say("");
+    return emit({ already: true, instance: seen, firstRun: Boolean(held.firstRun) }, EXIT.ok);
   }
 
   /* The Postgres port gets the same treatment, with one allowance: a
@@ -178,10 +229,20 @@ export async function up(plan, flags) {
       ["3 serve", `firetower serve --dev --port ${plan.control.value} --bind 127.0.0.1`],
       ["  env", `DATABASE_URL=${databaseUrl(plan)}`],
       ["  env", `FIRETOWER_HOME=${plan.home}`],
-      ["4 passwd", `firetower passwd admin  ${dim("(password piped on stdin)")}`],
-      ["5 login", `POST ${serverUrl(plan)}/api/v1/auth/login`],
-      ["6 setup", `POST /api/v1/setup/organization, POST /api/v1/setup/complete`],
-      ["then", "record /bootstrap's serverId in the run lock"],
+      ...(firstRun
+        ? [
+            ["  env", `ADMIN_INITIAL_PASSWORD=${dim("24 random bytes, written only to the run lock")}`],
+            ["4 login", `POST ${serverUrl(plan)}/api/v1/auth/login  ${dim("a token, and 403 on every other route")}`],
+            ["not run", dim("passwd admin — so must_change_password still stands")],
+            ["not run", dim("/setup/organization and /setup/complete — so the wizard still stands")],
+            ["then", "phase claimed, firstRun recorded. There is no serverId to record until the organisation is named"],
+          ]
+        : [
+            ["4 passwd", `firetower passwd admin  ${dim("(password piped on stdin)")}`],
+            ["5 login", `POST ${serverUrl(plan)}/api/v1/auth/login`],
+            ["6 setup", `POST /api/v1/setup/organization, POST /api/v1/setup/complete`],
+            ["then", "record /bootstrap's serverId in the run lock"],
+          ]),
     ]);
     say("");
     return emit({ dryRun: true, plan: lockable(plan) });
@@ -199,12 +260,13 @@ export async function up(plan, flags) {
     home: plan.home,
     session: plan.session,
     serverId: null,
+    firstRun,
     evidence: [],
     posted: [],
   });
 
   /* 1 — build */
-  step(1, STEPS, "cargo build -p ft-cli");
+  step(1, total, "cargo build -p ft-cli");
   let at = Date.now();
   if (existsSync(binary(plan)) && !flags.rebuild) {
     note(`${binary(plan)} is there; --rebuild to build anyway`);
@@ -226,7 +288,7 @@ export async function up(plan, flags) {
   }
 
   /* 2 — postgres */
-  step(2, STEPS, `docker compose -p ${plan.project} up -d postgres`);
+  step(2, total, `docker compose -p ${plan.project} up -d postgres`);
   at = Date.now();
   try {
     await compose(plan, "up", "-d", "--wait", "postgres");
@@ -246,14 +308,19 @@ export async function up(plan, flags) {
   done(`postgres on 127.0.0.1:${plan.postgres.value}`, Date.now() - at);
 
   /* 3 — serve */
-  step(3, STEPS, `firetower serve --dev --port ${plan.control.value}`);
+  step(3, total, `firetower serve --dev --port ${plan.control.value}`);
   at = Date.now();
   mkdirSync(plan.home, { recursive: true, mode: 0o700 });
   const out = openSync(path.join(plan.logs, "server.out"), "a");
   const err = openSync(path.join(plan.logs, "server.err"), "a");
+  /* The seeded administrator, for `--first-run` only. Generated the way step
+     4 generates one and written only to the run lock, so the credential this
+     run drives with is still not derivable from anything that is printed. */
+  const seeded = firstRun ? newPassword() : null;
+  if (seeded) updateLock(plan, { adminPassword: seeded });
   const server = spawn(binary(plan), serveArgs(plan), {
     cwd: plan.checkout,
-    env: serverEnv(plan),
+    env: serverEnv(plan, { adminPassword: seeded }),
     detached: true,
     stdio: ["ignore", out, err],
   });
@@ -285,8 +352,56 @@ export async function up(plan, flags) {
   }
   done(`answering on ${serverUrl(plan)}`, Date.now() - at);
 
+  /* `--first-run` stops here, which is the whole point of it: steps 4 and 6
+     are what clear the two gates, so an instance that wants to show them has
+     to not have had them. One login, so the credential is proven to work and
+     `doctor` has a token to ask /setup with — and the 403 it gets back is
+     itself the readback for the forced password change. */
+  if (firstRun) {
+    step(4, total, "POST /api/v1/auth/login");
+    at = Date.now();
+    const got = await signIn(plan);
+    if (!got.ok) {
+      return fail(EXIT.failed, {
+        problem: `signing in as the seeded administrator answered ${got.status}`,
+        because: [
+          JSON.stringify(got.body),
+          "ADMIN_INITIAL_PASSWORD is read by ensure_admin only while no user exists (lib.rs:383-391), so a database that already had one ignored it",
+        ],
+        instead: [
+          "control-firetower down --all     end this run and its database",
+          "control-firetower up --first-run  a fresh database seeds the administrator again",
+          "",
+          "`reset --first-run` is the cheap route: it drops the database and comes back",
+          "here in about 3s.",
+        ],
+      });
+    }
+    done(`signed in as ${got.user?.username ?? "admin"}`, Date.now() - at);
+    updateLock(plan, { firstRun: true });
+
+    say("");
+    table([
+      "Up, and deliberately unprepared",
+      ["phase", `${PHASE.claimed}  ${dim("owned by having bound a silent port, not by a serverId")}`],
+      ["control plane", serverUrl(plan)],
+      ["administrator", `admin  ${dim("must_change_password is set: every other authenticated route answers 403")}`],
+      ["organisation", dim("unnamed, so /bootstrap has no serverId and the desktop draws the setup wizard")],
+      ["renderer", `not started. cd desktop && pnpm exec vite --port ${plan.renderer.value} --strictPort`],
+      ["run lock", plan.lock],
+    ]);
+    say("");
+    say(`  ${dim("the two journeys nothing else in the checkout exercises")}`);
+    say("    control-firetower drive act replace-the-temporary-password");
+    say("    control-firetower drive act name-this-firetower");
+    say("");
+    say(`  ${dim("each is one-shot: it clears the gate it is about. reset --first-run makes another instance.")}`);
+    say("");
+    return emit({ firstRun: true, phase: PHASE.claimed, server: serverUrl(plan), plan: lockable(plan) });
+  }
+
   /* 4 — the forced password change, cleared in the same statement */
-  step(4, STEPS, "firetower passwd admin");
+  step(4, total, "firetower passwd admin");
   at = Date.now();
   /* Generated here, kept only in the lock, never derived from anything that
      is printed or published — see newPassword() in key.mjs. */
@@ -310,7 +425,7 @@ export async function up(plan, flags) {
   note(`the administrator password is random per run and lives only in ${plan.lock}`);
 
   /* 5 — a token */
-  step(5, STEPS, "POST /api/v1/auth/login");
+  step(5, total, "POST /api/v1/auth/login");
   at = Date.now();
   const signedIn = await signIn(plan);
   if (!signedIn.ok) {
@@ -326,7 +441,7 @@ export async function up(plan, flags) {
   done(`signed in as ${signedIn.user?.username ?? "admin"}`, Date.now() - at);
 
   /* 6 — setup, or the desktop shows the wizard instead of the app */
-  step(6, STEPS, "POST /api/v1/setup/organization, POST /api/v1/setup/complete");
+  step(6, total, "POST /api/v1/setup/organization, POST /api/v1/setup/complete");
   at = Date.now();
   const named = await raw(plan, "POST", "/setup/organization", {
     token: signedIn.token,

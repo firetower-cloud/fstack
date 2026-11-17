@@ -41,6 +41,8 @@ Run the relevant automated tests and perform manual testing where necessary.
 
 Test actual application behaviour, not just whether the implementation appears correct from reading the code.
 
+On the `firetower` repository, that means the `verify-firetower` skill: it brings up an isolated stack of this run's own, drives the desktop app in Chrome the way a person does, and says plainly which parts of the app a browser run cannot prove at all. Read its feature map for the journey you are testing, and run `control-firetower limits --touched <path>` before writing the word verified.
+
 For UI changes, inspect the interface at relevant viewport sizes and capture screenshots.
 
 ### 4. Report
@@ -54,6 +56,8 @@ Produce a clear report containing:
 - Bugs found, with reproduction steps.
 - Screenshots where relevant.
 - Remaining risks or untested areas.
+
+Evidence belongs in a comment on the pull request it vouches for, with images attached by `gh pr comment --attach` so they render inline — the `pr-screenshots` convention. A path, a link or a base64 data URI does not render and the reader never sees the picture. Post before cleaning up: a run that tears down its stack first has destroyed its own proof.
 
 Classify findings by severity and distinguish confirmed defects from observations.
 

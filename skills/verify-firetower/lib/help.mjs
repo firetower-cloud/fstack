@@ -221,6 +221,19 @@ USAGE
   control-firetower up [--rebuild] [--dry-run] [--json]
 
 OPTIONS
+  --first-run    do steps 1 to 3 only, and leave both first-run gates
+                 standing. The administrator is seeded through
+                 ADMIN_INITIAL_PASSWORD, which still sets
+                 must_change_password — "a credential that came out of a file
+                 cannot quietly become the permanent one" — so the forced
+                 password change and the setup wizard can be DRIVEN rather
+                 than skipped. Nothing else in the firetower checkout
+                 exercises either (firetower#336). The run stays in phase
+                 'claimed': /bootstrap has no serverId until the organisation
+                 is named, so ownership rests on this run having bound a
+                 silent port and its child still running exactly what it
+                 launched. 'reset --first-run' gets there from a running
+                 instance in about 3s
   --rebuild      cargo build even if target/debug/firetower exists
   --dry-run      print the six steps, with the real ports and paths, and do
                  nothing. Safe to run first, and worth it on a machine you
@@ -325,13 +338,13 @@ EXAMPLES
 
   The frontend transport: playwright-core against the desktop's own Vite
   renderer, pointed at this run's ft-server. This is the production user path
-  rather than a test hook — the app's first screen is "type a control plane
-  address and Connect" — and desktop/src/bridge.ts exists precisely so the
-  app renders in an ordinary tab.
+  rather than a test hook — the app's first screen asks where your Firetower
+  is, and you type an address and press Continue — and desktop/src/bridge.ts
+  exists precisely so the app renders in an ordinary tab.
 
-  Each call opens the app, signs in with this run's administrator, gets past
-  the forced password change and the setup wizard, goes where you asked, and
-  captures the resulting state: a screenshot, an accessibility snapshot, the
+  Each call opens the app, signs in with this run's administrator, ASSERTS
+  that neither first-run gate is on screen rather than assuming it, goes
+  where you asked, and captures the resulting state: a screenshot, an accessibility snapshot, the
   page's console errors, and the command that produced them. A screenshot
   verifies layout and never a value, which is why the snapshot is not
   optional.
@@ -348,11 +361,47 @@ SUBCOMMANDS
                       change: a selector list that has never been driven is
                       the rot a feature map exists to prevent
   open <state>        go to a state and capture it
-  act <gesture>       perform a named gesture, then capture
+  act <gesture>       perform a named gesture or a first-run journey, then
+                      capture. 'drive states' lists both
   signin              just the sign-in sequence, for checking the renderer
+
+THE FIRST-RUN JOURNEYS
+  Three of what 'act' takes are journeys rather than gestures: they start at
+  the renderer's root with nothing remembered, and walk the screens a person
+  meets before the app — the address screen, the forced password change and
+  the setup wizard. They exist because NOTHING in the firetower checkout
+  exercises those: the mock harness seeds localStorage and never signs in,
+  and the live one clears both gates over the API before the window opens
+  (firetower#336).
+
+    connect-an-address              either instance
+    replace-the-temporary-password  needs 'up --first-run'
+    name-this-firetower             needs 'up --first-run'
+
+  The last two are ONE-SHOT: driving one clears the gate it is about, which
+  is what makes it a proof. 'reset --first-run' makes another instance in
+  about 3s. A journey photographs every state it asserts on the way through,
+  not only the one it ends in — the password screen is gone by the time the
+  journey has finished opening it.
+
+  One step of one journey is not driven through the app: replacing the
+  password. The desktop deliberately carries no password form, so that
+  happens on the control plane's web interface. It is performed over the API,
+  recorded on the capture, and printed in the posted comment as 'Not driven
+  through the app'.
 
 OPTIONS
   --as <name>         name this capture; it becomes the evidence filename
+  --at <user@host:port>
+                      the ssh endpoint for a gesture that adds a machine.
+                      Refused unless 'docker ps' shows a container carrying
+                      this session's label publishing that port: pressing
+                      'Add it' makes the CONTROL PLANE open an ssh connection
+                      to whatever is in the field, so the address is an action
+  --remote <path|url> the remote for the gesture that adds a repository. The
+                      probe behind it is answered by a machine, not by the
+                      control plane, so it has to be something the machine
+                      can see
   --feature <id>      the feature-map entry this proof is for. Recorded with
                       the capture, so a proof is traceable to the entry that
                       demanded it and a different path can never be reported

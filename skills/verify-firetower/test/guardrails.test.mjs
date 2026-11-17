@@ -164,7 +164,7 @@ test("nothing ships in the vocabulary without an origin and a verification date"
      disagree with each other, and neither had been driven against the app
      recently. A handle with no recorded origin cannot be diffed when it
      breaks, and one with no recorded verification was never driven at all. */
-  const { STATES, GESTURES, GATES, SIGNIN, NOT_WHAT_THEY_SAY } = await import("../lib/vocabulary.mjs");
+  const { STATES, GESTURES, GATES, SIGNIN, NOT_WHAT_THEY_SAY, FIRST_RUN, OFFSTAGE } = await import("../lib/vocabulary.mjs");
 
   for (const [name, state] of Object.entries(STATES)) {
     assert.ok(state.from?.length > 5, `state ${name} has no origin`);
@@ -183,19 +183,100 @@ test("nothing ships in the vocabulary without an origin and a verification date"
   for (const [name, handle] of Object.entries(SIGNIN)) {
     assert.ok(handle.from?.length > 5, `signin ${name} has no origin`);
   }
+  /* The first-run journeys carry the same burden as everything else, plus
+     one of their own: a journey has to say which instance it needs, because
+     two of the three can only be driven against one whose gates are still
+     standing and reporting them as passing from anywhere else is the bug
+     this bundle is about. */
+  for (const [name, journey] of Object.entries(FIRST_RUN)) {
+    assert.ok(journey.from?.length > 5, `journey ${name} has no origin`);
+    assert.ok(journey.verified, `journey ${name} has never been driven`);
+    assert.ok(journey.then, `journey ${name} has no post-condition, so "it worked" is undefined`);
+    assert.ok(["first-run", "either"].includes(journey.needs), `journey ${name} does not say which instance it needs`);
+    /* And a step this transport cannot drive is declared, with its reason,
+       rather than slipped in as an ordinary step. */
+    for (const action of journey.steps) {
+      if (!action.offstage) continue;
+      const aside = OFFSTAGE[action.offstage];
+      assert.ok(aside, `journey ${name} names an offstage step that does not exist: ${action.offstage}`);
+      assert.ok(aside.what && aside.how && aside.because, `offstage ${action.offstage} does not say what, how and why`);
+    }
+  }
+
   /* And the states the build does not reach are recorded rather than aliased
-     onto whatever they land on — states.mjs:11-13. */
+     onto whatever they land on — states.mjs:11-13.
+     
+     A route may be BOTH a known-wrong route and a state, and `/configuration/roles`
+     is: its word is `roles`, the rail calls it Profiles and the screen's own
+     heading is Agent profiles. What may never happen is a state at that path
+     whose landmark is something other than what the route was recorded as
+     landing on — that is the "quietly aliased" failure, and it is the one
+     this now checks for rather than banning the entry outright. */
   assert.ok(NOT_WHAT_THEY_SAY.length >= 2);
   for (const route of NOT_WHAT_THEY_SAY) {
     assert.ok(route.lands && route.found && route.note);
-    assert.ok(!Object.values(STATES).some((s) => s.path === route.path), `${route.path} is both a state and a known-wrong route`);
+    for (const [name, state] of Object.entries(STATES)) {
+      if (state.path !== route.path) continue;
+      assert.equal(
+        state.landmark.name,
+        route.lands,
+        `state ${name} is at ${route.path}, which was recorded as landing on ${route.lands}, and asserts something else`,
+      );
+    }
   }
 });
 
-test("no gesture presses a button that probes somebody else's network", () => {
+test("no gesture presses a probe at an address this run did not start", async () => {
   /* states.mjs:118-120 presses `Add it|Reaching it` after typing an address,
      because the mock server answers it. Against a real control plane that is
-     an ssh probe to 10.4.0.22, which is somebody's network. */
-  const text = readFileSync(path.join(here, "lib/vocabulary.mjs"), "utf8");
-  assert.ok(!/click:\s*button\("Add it"/.test(text), "Add it is a post-condition here, never a step");
+     an ssh connection opened BY THE CONTROL PLANE to whatever is in the
+     field — so the address is as much an action as a value.
+     
+     The rule is therefore about the address rather than about the button.
+     `add-a-machine` types `10.4.0.22`, which is somebody's network, and must
+     stop before the probe. Anything that does press it must type a
+     placeholder this run fills in, and `ownsEndpoint` has to have agreed
+     that `docker ps` shows a container of this run's publishing that port. */
+  const { GESTURES } = await import("../lib/vocabulary.mjs");
+  const { PRECONDITIONS } = await import("../lib/drive.mjs");
+  for (const [name, gesture] of Object.entries(GESTURES)) {
+    const presses = gesture.steps.some((step) => step.click?.handle === "Add it" || step.click?.name === "Add it");
+    if (!presses) continue;
+    /* Two different buttons wear this label — the machine dialog's, which
+       opens an ssh connection from the control plane, and the repositories
+       paste panel's, which has a machine try to read a remote. Both reach
+       out at something that was typed, so both answer to the same rule. */
+    assert.ok(
+      PRECONDITIONS.includes(gesture.needs),
+      `${name} presses Add it and declares ${JSON.stringify(gesture.needs)}, which nothing checks`,
+    );
+    const typed = gesture.steps.find((step) => step.fill)?.with;
+    assert.match(typed ?? "", /^<[a-z-]+>$/, `${name} presses Add it at a literal address: ${typed}`);
+  }
+  /* And the one that stops short still stops short. */
+  assert.ok(
+    !GESTURES["add-a-machine"].steps.some((step) => step.click?.handle === "Add it"),
+    "add-a-machine types an address and does not probe it",
+  );
+});
+
+test("the endpoint check is a positive assertion, and every unknown reads as not mine", async () => {
+  const { ownsEndpoint } = await import("../lib/drive.mjs");
+  const plan = { key: "k", session: "s_k" };
+  const listed = () => "ft-machine-s_k\t127.0.0.1:2470->22/tcp";
+
+  assert.equal(ownsEndpoint(plan, "editor@127.0.0.1:2470", listed).ok, true);
+  /* Not loopback: this run can only establish that it started something on
+     its own machine. */
+  assert.equal(ownsEndpoint(plan, "editor@203.0.113.9:2470", listed).ok, false);
+  /* Loopback, and no container of this run's publishes it. */
+  assert.equal(ownsEndpoint(plan, "editor@127.0.0.1:22", listed).ok, false);
+  /* docker could not be asked: a thing that went wrong is not permission. */
+  assert.equal(
+    ownsEndpoint(plan, "editor@127.0.0.1:2470", () => {
+      throw new Error("docker daemon is not running");
+    }).ok,
+    false,
+  );
+  assert.equal(ownsEndpoint(plan, undefined, listed).ok, false);
 });

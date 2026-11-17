@@ -164,6 +164,14 @@ function body(plan, captures, held) {
     lines.push(capture.command ?? "?");
     lines.push("```");
     lines.push("");
+    /* In the order they happened: the states on the way through, then the
+       one it ended in. */
+    for (const shot of capture.alongside ?? []) {
+      lines.push(`On the way: ${shot.was}`);
+      lines.push("");
+      lines.push(`![${capture.name} — ${shot.was}](./${path.basename(shot.at)})`);
+      lines.push("");
+    }
     if (capture.screenshot) lines.push(`![${capture.name}](./${path.basename(capture.screenshot)})`);
     lines.push("");
     if (capture.snapshot) {
@@ -179,6 +187,15 @@ function body(plan, captures, held) {
     if (capture.readback) {
       lines.push(`Read back from a second view: \`${capture.readback.how}\` -> \`${JSON.stringify(capture.readback.saw).slice(0, 400)}\``);
       lines.push("");
+    }
+    /* A step of the journey this transport did not drive, published as
+       prominently as the part it did. A reviewer who is not told which step
+       happened off-stage is being shown a journey that looks complete. */
+    if (capture.offstage?.length) {
+      for (const aside of capture.offstage) {
+        lines.push(`**Not driven through the app:** ${aside.what} — done as \`${aside.how}\`. ${aside.because}`);
+        lines.push("");
+      }
     }
     /* Two different things, and the comment used to call the second one the
        first. An uncaught page error means the capture is not evidence of
@@ -263,7 +280,18 @@ async function post(plan, captures, flags) {
      broken image. Measured on the first real post. So: run gh from the
      evidence directory and name both sides `./<file>`. */
   const attached = publishing.filter((c) => c.screenshot && existsSync(c.screenshot));
-  const attachments = attached.map((c) => `./${path.basename(c.screenshot)}#${c.name}`);
+  /* The states a journey passed through, attached beside the state it ended
+     in. For the first-run journeys the middle is where the proof is: the
+     forced-password-change screen is gone by the time the journey has
+     finished opening it, so a comment carrying only the final screenshot
+     would show the setup wizard and call it a password change. */
+  const alongside = publishing.flatMap((c) =>
+    (c.alongside ?? []).filter((shot) => existsSync(shot.at)).map((shot) => ({ ...shot, of: c.name })),
+  );
+  const attachments = [
+    ...attached.map((c) => `./${path.basename(c.screenshot)}#${c.name}`),
+    ...alongside.map((shot) => `./${path.basename(shot.at)}#${shot.of} — ${shot.was}`),
+  ];
   const args = ["pr", "comment", String(flags.pr), "--body-file", path.basename(file)];
   if (flags.repo) args.splice(3, 0, "--repo", flags.repo);
   for (const attachment of attachments) args.push("--attach", attachment);
